@@ -1,0 +1,22 @@
+[package]
+name = "multiplexer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "multiplexer"
+path = "src/main.rs"
+
+[dependencies]
+crossterm.workspace = true
+ratatui.workspace = true
+libc.workspace = true
+mux-core = { path = "../mux-core" }
+portable-pty.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+vt100.workspace = true
+unicode-width = "=0.2.2"

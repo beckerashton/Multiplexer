@@ -1,0 +1,23 @@
+[workspace]
+resolver = "3"
+members = [
+  "crates/mux-core",
+  "crates/multiplexer",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+authors = ["Multiplexer contributors"]
+
+[workspace.dependencies]
+crossterm = "=0.29.0"
+ratatui = { version = "=0.28.1", default-features = false, features = ["crossterm"] }
+libc = "=0.2.189"
+portable-pty = "=0.9.0"
+serde = { version = "=1.0.219", features = ["derive"] }
+thiserror = "=2.0.12"
+toml = "=0.8.23"
+vt100 = "=0.16.2"
