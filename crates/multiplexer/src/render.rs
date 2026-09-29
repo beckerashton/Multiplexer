@@ -531,7 +531,7 @@ fn bindings_popup(buffer: &mut Buffer, help: &[(String, bool)], title: &str, hin
         .min(u16::MAX as usize) as u16;
     let width = area.width.saturating_sub(4).max(4).min(desired_width);
     let column_width = width.saturating_sub(3) / 2;
-    let columns = popup_columns(&help, column_width as usize);
+    let columns = popup_columns(help, column_width as usize);
     let content_rows = columns
         .iter()
         .map(Vec::len)

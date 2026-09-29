@@ -523,50 +523,45 @@ fn parse_action(name: &str) -> Result<BindingAction, String> {
         "down" => Some(Direction::Down),
         _ => None,
     };
-    if let Some(suffix) = normalized.strip_prefix("carry_stack_") {
-        return suffix
-            .parse::<usize>()
-            .ok()
-            .filter(|n| (1..=9).contains(n))
-            .map(BindingAction::CarryToTab)
-            .ok_or_else(|| "carry destination must be 1-9".into());
-    }
-    if let Some(suffix) = normalized.strip_prefix("swap_stack_") {
-        return direction(suffix)
-            .map(BindingAction::Swap)
-            .ok_or_else(|| "unknown swap direction".into());
-    }
-    if let Some(suffix) = normalized.strip_prefix("carry_") {
+    for (prefix, action) in [
+        (
+            "carry_stack_",
+            BindingAction::CarryToTab as fn(usize) -> BindingAction,
+        ),
+        ("carry_", BindingAction::CarryMemberToTab),
+    ] {
+        let Some(suffix) = normalized.strip_prefix(prefix) else {
+            continue;
+        };
         return suffix
             .parse::<usize>()
             .ok()
             .filter(|number| (1..=9).contains(number))
-            .map(BindingAction::CarryMemberToTab)
+            .map(action)
             .ok_or_else(|| "carry destination must be 1-9".into());
+    }
+    if normalized == "resize_mode" {
+        return Ok(BindingAction::ResizeMode);
+    }
+    for (prefix, action, error) in [
+        (
+            "swap_stack_",
+            BindingAction::Swap as fn(Direction) -> BindingAction,
+            "unknown swap direction",
+        ),
+        ("focus_", BindingAction::Focus, "unknown focus direction"),
+        ("swap_", BindingAction::SwapMember, "unknown swap direction"),
+        ("resize_", BindingAction::Resize, "unknown resize direction"),
+    ] {
+        if let Some(suffix) = normalized.strip_prefix(prefix) {
+            return direction(suffix).map(action).ok_or_else(|| error.into());
+        }
     }
     if normalized == "pane_previous" {
         return Ok(BindingAction::PreviousPane);
     }
     if normalized == "pane_next" {
         return Ok(BindingAction::NextPane);
-    }
-    if let Some(suffix) = normalized.strip_prefix("focus_") {
-        return direction(suffix)
-            .map(BindingAction::Focus)
-            .ok_or_else(|| "unknown focus direction".into());
-    }
-    if let Some(suffix) = normalized.strip_prefix("swap_") {
-        return direction(suffix)
-            .map(BindingAction::SwapMember)
-            .ok_or_else(|| "unknown swap direction".into());
-    }
-    if normalized == "resize_mode" {
-        return Ok(BindingAction::ResizeMode);
-    }
-    if let Some(suffix) = normalized.strip_prefix("resize_") {
-        return direction(suffix)
-            .map(BindingAction::Resize)
-            .ok_or_else(|| "unknown resize direction".into());
     }
     if let Some(suffix) = normalized.strip_prefix("stack_") {
         return match suffix {
@@ -695,6 +690,7 @@ mod tests {
 
     #[test]
     fn modal_bindings_have_separate_scopes_and_help_uses_custom_keys() {
+        assert!(RuntimeConfig::from_toml_str("[bindings]\nresize_mode = \"z\"").is_ok());
         let config = RuntimeConfig::from_toml_str(
             "[bindings]\nresize_mode = \"z\"\nbroadcast_menu = \"c\"\nbroadcast_reset = \"z\"",
         )
@@ -732,6 +728,14 @@ mod tests {
         );
         assert!(RuntimeConfig::from_toml_str("[bindings]\nbroadcast_reset = \"b\"").is_err());
         assert!(RuntimeConfig::from_toml_str("[bindings]\nbroadcast_reset = \"Esc\"").is_err());
+    }
+
+    #[test]
+    fn resize_help_lists_resize_keys_and_configured_focus_keys() {
+        let config = RuntimeConfig::from_toml_str("[bindings]\nfocus_left = \"Alt-z\"").unwrap();
+        let help = config.resize_help();
+        assert!(help.iter().any(|(line, _)| line.contains("h/j/k/l")));
+        assert!(help.iter().any(|(line, _)| line == "Alt-z ~ Focus Left"));
     }
 
     #[test]

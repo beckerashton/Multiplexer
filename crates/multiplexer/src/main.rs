@@ -170,6 +170,17 @@ fn run(_guard: TerminalGuard, config: BindingConfig) -> Result<(), Box<dyn std::
             status = "quit confirmation timed out".into();
             dirty = true;
         }
+        let mut event_handler = EventHandler {
+            workspace: &mut workspace,
+            backend: &mut backend,
+            router: &mut router,
+            selection_mode: &mut selection_mode,
+            config: &config,
+            default_session: &default_session,
+            status: &mut status,
+            pending_deadline: &mut pending_deadline,
+            quit_deadline: &mut quit_deadline,
+        };
         match input_rx.recv_timeout(INPUT_TICK) {
             Ok(chunk) => {
                 for event in raw.push(&chunk) {
@@ -179,42 +190,39 @@ fn run(_guard: TerminalGuard, config: BindingConfig) -> Result<(), Box<dyn std::
                                 MouseFrame::Bytes(bytes) => {
                                     for bytes in keyboard.push(&bytes) {
                                         dirty = true;
-                                        if handle_event(
-                                            InputEvent::Bytes(bytes),
-                                            &mut workspace,
-                                            &mut backend,
-                                            &mut router,
-                                            &mut selection_mode,
-                                            &config,
-                                            &default_session,
-                                            &mut status,
-                                            &mut pending_deadline,
-                                            &mut quit_deadline,
-                                        )? {
+                                        if event_handler.handle(InputEvent::Bytes(bytes))? {
                                             return Ok(());
                                         }
                                     }
                                 }
                                 MouseFrame::Mouse(event) => {
-                                    if selection_mode.is_some() {
+                                    if event_handler.selection_mode.is_some() {
                                         continue;
                                     }
-                                    let previous_status = status.clone();
-                                    if workspace.view().pending_confirmation.is_none()
-                                        && quit_deadline.is_none()
+                                    let previous_status = event_handler.status.clone();
+                                    if event_handler
+                                        .workspace
+                                        .view()
+                                        .pending_confirmation
+                                        .is_none()
+                                        && event_handler.quit_deadline.is_none()
                                     {
-                                        if scroll_mouse(&workspace, &mut backend, &event) {
+                                        if scroll_mouse(
+                                            event_handler.workspace,
+                                            event_handler.backend,
+                                            &event,
+                                        ) {
                                             dirty = true;
                                         } else {
                                             forward_mouse(
-                                                &workspace,
-                                                &backend,
+                                                event_handler.workspace,
+                                                event_handler.backend,
                                                 &event,
-                                                &mut status,
+                                                event_handler.status,
                                             );
                                         }
                                     }
-                                    dirty |= status != previous_status;
+                                    dirty |= *event_handler.status != previous_status;
                                 }
                             }
                         }
@@ -223,41 +231,22 @@ fn run(_guard: TerminalGuard, config: BindingConfig) -> Result<(), Box<dyn std::
                     dirty = true;
                     // A paste is an input boundary: preserve any preceding
                     // partial key before routing the opaque paste payload.
-                    for bytes in keyboard.flush() {
-                        if handle_event(
-                            InputEvent::Bytes(bytes),
-                            &mut workspace,
-                            &mut backend,
-                            &mut router,
-                            &mut selection_mode,
-                            &config,
-                            &default_session,
-                            &mut status,
-                            &mut pending_deadline,
-                            &mut quit_deadline,
-                        )? {
-                            return Ok(());
-                        }
+                    if event_handler.handle_bytes(keyboard.flush())? {
+                        return Ok(());
                     }
                     if matches!(event, InputEvent::Paste(_))
-                        && (workspace.view().pending_confirmation.is_some()
-                            || quit_deadline.is_some())
+                        && (event_handler
+                            .workspace
+                            .view()
+                            .pending_confirmation
+                            .is_some()
+                            || event_handler.quit_deadline.is_some())
                     {
-                        status = "paste ignored while confirmation is pending".into();
+                        *event_handler.status =
+                            "paste ignored while confirmation is pending".into();
                         continue;
                     }
-                    if handle_event(
-                        event,
-                        &mut workspace,
-                        &mut backend,
-                        &mut router,
-                        &mut selection_mode,
-                        &config,
-                        &default_session,
-                        &mut status,
-                        &mut pending_deadline,
-                        &mut quit_deadline,
-                    )? {
+                    if event_handler.handle(event)? {
                         return Ok(());
                     }
                 }
@@ -267,70 +256,24 @@ fn run(_guard: TerminalGuard, config: BindingConfig) -> Result<(), Box<dyn std::
                     dirty = true;
                     for frame in mouse.flush() {
                         if let MouseFrame::Bytes(bytes) = frame {
-                            if handle_event(
-                                InputEvent::Bytes(bytes),
-                                &mut workspace,
-                                &mut backend,
-                                &mut router,
-                                &mut selection_mode,
-                                &config,
-                                &default_session,
-                                &mut status,
-                                &mut pending_deadline,
-                                &mut quit_deadline,
-                            )? {
+                            if event_handler.handle(InputEvent::Bytes(bytes))? {
                                 return Ok(());
                             }
                         }
                     }
-                    for bytes in keyboard.flush() {
-                        if handle_event(
-                            InputEvent::Bytes(bytes),
-                            &mut workspace,
-                            &mut backend,
-                            &mut router,
-                            &mut selection_mode,
-                            &config,
-                            &default_session,
-                            &mut status,
-                            &mut pending_deadline,
-                            &mut quit_deadline,
-                        )? {
-                            return Ok(());
-                        }
+                    if event_handler.handle_bytes(keyboard.flush())? {
+                        return Ok(());
                     }
                     mouse_deadline = None;
                 }
                 if router_deadline.is_some_and(|deadline| now >= deadline) {
                     dirty = true;
                     for event in raw.flush_marker_prefix() {
-                        if handle_event(
-                            event,
-                            &mut workspace,
-                            &mut backend,
-                            &mut router,
-                            &mut selection_mode,
-                            &config,
-                            &default_session,
-                            &mut status,
-                            &mut pending_deadline,
-                            &mut quit_deadline,
-                        )? {
+                        if event_handler.handle(event)? {
                             return Ok(());
                         }
                     }
-                    let _ = handle_event(
-                        InputEvent::Timeout,
-                        &mut workspace,
-                        &mut backend,
-                        &mut router,
-                        &mut selection_mode,
-                        &config,
-                        &default_session,
-                        &mut status,
-                        &mut pending_deadline,
-                        &mut quit_deadline,
-                    )?;
+                    let _ = event_handler.handle(InputEvent::Timeout)?;
                     router_deadline = None;
                 }
             }
@@ -352,172 +295,189 @@ fn run(_guard: TerminalGuard, config: BindingConfig) -> Result<(), Box<dyn std::
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn handle_event(
-    event: InputEvent,
-    workspace: &mut Workspace,
-    backend: &mut TerminalBackend,
-    router: &mut mux_core::InputRouter,
-    selection_mode: &mut Option<SelectionMode>,
-    config: &BindingConfig,
-    default_session: &SessionSpec,
-    status: &mut String,
-    pending_deadline: &mut Option<Instant>,
-    quit_deadline: &mut Option<Instant>,
-) -> Result<bool, Box<dyn std::error::Error>> {
-    if let Some(mode) = selection_mode.as_mut() {
-        if let InputEvent::Bytes(bytes) = &event {
-            match mode.input(bytes) {
-                SelectionOutcome::Continue => {}
-                SelectionOutcome::Cancel => {
-                    *selection_mode = None;
-                    *status = "selection cancelled".into();
-                }
-                SelectionOutcome::Yank(text) => {
-                    match copy_with_helper(&text, &ClipboardEnvironment::default()) {
-                        Ok(()) => {
-                            *selection_mode = None;
-                            *status = "selection copied".into();
-                        }
-                        Err(error) => {
-                            *status = format!("copy failed: {error}; y retries, Esc cancels")
+struct EventHandler<'a> {
+    workspace: &'a mut Workspace,
+    backend: &'a mut TerminalBackend,
+    router: &'a mut mux_core::InputRouter,
+    selection_mode: &'a mut Option<SelectionMode>,
+    config: &'a BindingConfig,
+    default_session: &'a SessionSpec,
+    status: &'a mut String,
+    pending_deadline: &'a mut Option<Instant>,
+    quit_deadline: &'a mut Option<Instant>,
+}
+
+impl EventHandler<'_> {
+    fn handle(&mut self, event: InputEvent) -> Result<bool, Box<dyn std::error::Error>> {
+        if self.selection_mode.is_none() {
+            // InputRouter stops after a command, so route one byte at a time
+            // to refresh workspace context for following bytes (Ctrl-b,q,y).
+            if let InputEvent::Bytes(bytes) = &event {
+                if bytes.len() > 1 {
+                    for byte in bytes {
+                        if self.handle_one(InputEvent::Bytes(vec![*byte]))? {
+                            return Ok(true);
                         }
                     }
+                    return Ok(false);
                 }
             }
         }
-        return Ok(false);
+        self.handle_one(event)
     }
-    // InputRouter intentionally stops after a command so callers can refresh
-    // workspace context. Feeding a host chunk one byte at a time gives the
-    // confirmation layer first chance at bytes following that command (for
-    // example Ctrl-b,q,y in one terminal read).
-    if let InputEvent::Bytes(bytes) = &event {
-        if bytes.len() > 1 {
-            for byte in bytes {
-                if handle_event(
-                    InputEvent::Bytes(vec![*byte]),
-                    workspace,
-                    backend,
-                    router,
-                    selection_mode,
-                    config,
-                    default_session,
-                    status,
-                    pending_deadline,
-                    quit_deadline,
-                )? {
-                    return Ok(true);
+
+    fn handle_one(&mut self, event: InputEvent) -> Result<bool, Box<dyn std::error::Error>> {
+        let workspace = &mut *self.workspace;
+        let backend = &mut *self.backend;
+        let router = &mut *self.router;
+        let selection_mode = &mut *self.selection_mode;
+        let config = self.config;
+        let default_session = self.default_session;
+        let status = &mut *self.status;
+        let pending_deadline = &mut *self.pending_deadline;
+        let quit_deadline = &mut *self.quit_deadline;
+        if let Some(mode) = selection_mode.as_mut() {
+            if let InputEvent::Bytes(bytes) = &event {
+                match mode.input(bytes) {
+                    SelectionOutcome::Continue => {}
+                    SelectionOutcome::Cancel => {
+                        *selection_mode = None;
+                        *status = "selection cancelled".into();
+                    }
+                    SelectionOutcome::Yank(text) => {
+                        match copy_with_helper(&text, &ClipboardEnvironment::default()) {
+                            Ok(()) => {
+                                *selection_mode = None;
+                                *status = "selection copied".into();
+                            }
+                            Err(error) => {
+                                *status = format!("copy failed: {error}; y retries, Esc cancels")
+                            }
+                        }
+                    }
                 }
             }
             return Ok(false);
         }
-    }
-    if quit_deadline.is_some() {
-        if let InputEvent::Bytes(bytes) = event {
-            for byte in bytes {
-                match byte {
-                    b'y' => return Ok(true),
-                    b'n' | 0x1b => {
-                        *quit_deadline = None;
-                        *status = "quit cancelled".into();
+        if quit_deadline.is_some() {
+            if let InputEvent::Bytes(bytes) = event {
+                for byte in bytes {
+                    match byte {
+                        b'y' => return Ok(true),
+                        b'n' | 0x1b => {
+                            *quit_deadline = None;
+                            *status = "quit cancelled".into();
+                        }
+                        _ => *status = "confirm quit with y, cancel with n or Esc".into(),
                     }
-                    _ => *status = "confirm quit with y, cancel with n or Esc".into(),
                 }
             }
+            return Ok(false);
         }
-        return Ok(false);
-    }
-    if let Some(pending) = workspace.view().pending_confirmation {
-        if let InputEvent::Bytes(bytes) = event {
-            for byte in bytes {
-                match byte {
-                    b'n' | 0x1b => {
-                        workspace.clear_pending_confirmation();
-                        *pending_deadline = None;
-                        *status = "confirmation cancelled".into();
+        if let Some(pending) = workspace.view().pending_confirmation {
+            if let InputEvent::Bytes(bytes) = event {
+                for byte in bytes {
+                    match byte {
+                        b'n' | 0x1b => {
+                            workspace.clear_pending_confirmation();
+                            *pending_deadline = None;
+                            *status = "confirmation cancelled".into();
+                        }
+                        b'y' => {
+                            let command = match pending {
+                                PendingConfirmation::CloseTab(tab) => {
+                                    WorkspaceCommand::ConfirmCloseTab(tab)
+                                }
+                                PendingConfirmation::KillSession { .. } => {
+                                    WorkspaceCommand::ConfirmKillFocusedSession
+                                }
+                                PendingConfirmation::KillStack { .. } => {
+                                    WorkspaceCommand::ConfirmKillFocusedStack
+                                }
+                            };
+                            apply_command(command, workspace, backend, status);
+                            *pending_deadline = None;
+                        }
+                        _ => *status = "confirm with y, cancel with n or Esc".into(),
                     }
-                    b'y' => {
-                        let command = match pending {
-                            PendingConfirmation::CloseTab(tab) => {
-                                WorkspaceCommand::ConfirmCloseTab(tab)
-                            }
-                            PendingConfirmation::KillSession { .. } => {
-                                WorkspaceCommand::ConfirmKillFocusedSession
-                            }
-                            PendingConfirmation::KillStack { .. } => {
-                                WorkspaceCommand::ConfirmKillFocusedStack
-                            }
+                }
+            }
+            return Ok(false);
+        }
+        let context = router_context(workspace, default_session);
+        let pasted = matches!(&event, InputEvent::Paste(_));
+        for route in router.route(event, &context, config) {
+            match route {
+                InputRoute::Forward(bytes) => {
+                    for session in
+                        plan_broadcast(&workspace.view(), workspace.view().broadcast_scope)
+                            .recipients
+                    {
+                        let input = if pasted {
+                            bytes.clone()
+                        } else {
+                            keyboard::application_cursor_key(
+                                &bytes,
+                                backend
+                                    .screen(session)
+                                    .is_some_and(|screen| screen.application_cursor()),
+                            )
                         };
-                        apply_command(command, workspace, backend, status);
-                        *pending_deadline = None;
+                        backend.set_scrollback(session, 0);
+                        if let Err(error) = backend.write(session, &input) {
+                            *status = format!("session {} write failed: {error}", session.0);
+                        }
                     }
-                    _ => *status = "confirm with y, cancel with n or Esc".into(),
                 }
-            }
-        }
-        return Ok(false);
-    }
-    let context = router_context(workspace, default_session);
-    let pasted = matches!(&event, InputEvent::Paste(_));
-    for route in router.route(event, &context, config) {
-        match route {
-            InputRoute::Forward(bytes) => {
-                for session in
-                    plan_broadcast(&workspace.view(), workspace.view().broadcast_scope).recipients
-                {
-                    let input = if pasted {
-                        bytes.clone()
+                InputRoute::Command(WorkspaceCommand::RequestQuit) => {
+                    *quit_deadline = Some(Instant::now() + CONFIRM_TIMEOUT);
+                    *status = "quit multiplexer? y/n".into();
+                }
+                InputRoute::Command(WorkspaceCommand::SelectionMode) => {
+                    let view = workspace.view();
+                    let tab = view
+                        .tabs
+                        .iter()
+                        .find(|tab| tab.id == view.active_tab)
+                        .expect("active tab");
+                    let session = tab.slots.get(&tab.focused_slot).and_then(|slot| {
+                        slot.stack
+                            .active
+                            .and_then(|index| slot.stack.sessions.get(index))
+                            .copied()
+                    });
+                    if let Some((session, screen)) =
+                        session.and_then(|id| backend.screen(id).map(|screen| (id, screen)))
+                    {
+                        *selection_mode = Some(SelectionMode::new(session, screen));
+                        *status = String::new();
                     } else {
-                        keyboard::application_cursor_key(
-                            &bytes,
-                            backend
-                                .screen(session)
-                                .is_some_and(|screen| screen.application_cursor()),
-                        )
-                    };
-                    backend.set_scrollback(session, 0);
-                    if let Err(error) = backend.write(session, &input) {
-                        *status = format!("session {} write failed: {error}", session.0);
+                        *status = "no pane buffer to select".into();
                     }
                 }
-            }
-            InputRoute::Command(WorkspaceCommand::RequestQuit) => {
-                *quit_deadline = Some(Instant::now() + CONFIRM_TIMEOUT);
-                *status = "quit multiplexer? y/n".into();
-            }
-            InputRoute::Command(WorkspaceCommand::SelectionMode) => {
-                let view = workspace.view();
-                let tab = view
-                    .tabs
-                    .iter()
-                    .find(|tab| tab.id == view.active_tab)
-                    .expect("active tab");
-                let session = tab.slots.get(&tab.focused_slot).and_then(|slot| {
-                    slot.stack
-                        .active
-                        .and_then(|index| slot.stack.sessions.get(index))
-                        .copied()
-                });
-                if let Some((session, screen)) =
-                    session.and_then(|id| backend.screen(id).map(|screen| (id, screen)))
-                {
-                    *selection_mode = Some(SelectionMode::new(session, screen));
-                    *status = String::new();
-                } else {
-                    *status = "no pane buffer to select".into();
+                InputRoute::Command(command) => {
+                    apply_command(command, workspace, backend, status);
+                    if workspace.view().pending_confirmation.is_some() {
+                        *pending_deadline = Some(Instant::now() + CONFIRM_TIMEOUT);
+                    }
                 }
+                InputRoute::Consume => {}
             }
-            InputRoute::Command(command) => {
-                apply_command(command, workspace, backend, status);
-                if workspace.view().pending_confirmation.is_some() {
-                    *pending_deadline = Some(Instant::now() + CONFIRM_TIMEOUT);
-                }
-            }
-            InputRoute::Consume => {}
         }
+        Ok(false)
     }
-    Ok(false)
+
+    fn handle_bytes(
+        &mut self,
+        events: impl IntoIterator<Item = Vec<u8>>,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        for bytes in events {
+            if self.handle(InputEvent::Bytes(bytes))? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
 }
 
 fn update_router_deadline(

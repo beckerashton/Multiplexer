@@ -233,7 +233,9 @@ mod tests {
         });
         let result = rx.recv_timeout(std::time::Duration::from_secs(1));
         worker.join().unwrap();
-        result.expect("copy waited for the background clipboard owner").unwrap();
+        result
+            .expect("copy waited for the background clipboard owner")
+            .unwrap();
         assert_eq!(dir.captured("xclip"), "copied");
     }
 

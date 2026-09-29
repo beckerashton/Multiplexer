@@ -147,24 +147,22 @@ impl LayoutTree {
     ) -> Option<SlotId> {
         let rects = self.geometry(bounds, min);
         let source = *rects.get(&slot)?;
-        let traversal = self.slots();
-        let mut candidates: Vec<(SlotId, CellRect)> = rects
+        self.slots()
             .into_iter()
-            .filter(|(candidate, rect)| {
-                *candidate != slot && touches_in_direction(source, *rect, direction)
+            .enumerate()
+            .filter_map(|(order, candidate)| {
+                let rect = rects[&candidate];
+                (candidate != slot && touches_in_direction(source, rect, direction)).then_some((
+                    (
+                        Reverse(shared_boundary(source, rect, direction)),
+                        center_offset(source, rect, direction),
+                        order,
+                    ),
+                    candidate,
+                ))
             })
-            .collect();
-        candidates.sort_by_key(|(candidate, rect)| {
-            (
-                Reverse(shared_boundary(source, *rect, direction)),
-                center_offset(source, *rect, direction),
-                traversal
-                    .iter()
-                    .position(|slot| slot == candidate)
-                    .unwrap_or(usize::MAX),
-            )
-        });
-        candidates.first().map(|(slot, _)| *slot)
+            .min_by_key(|(rank, _)| *rank)
+            .map(|(_, candidate)| candidate)
     }
 
     /// Find the opposite vertical edge in the same column, using the normal

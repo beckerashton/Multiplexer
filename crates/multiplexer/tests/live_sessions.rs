@@ -1,95 +1,26 @@
 use std::{
     fs,
-    io::{Read, Write},
+    io::Write,
     path::PathBuf,
-    sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
 
-use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
+mod common;
+use common::PtyHarness as Harness;
 
 const READY: Duration = Duration::from_secs(5);
 
-struct Harness {
-    child: Option<Box<dyn Child + Send + Sync>>,
-    writer: Option<Box<dyn Write + Send>>,
-    reader_done: Option<mpsc::Receiver<()>>,
-    directory: PathBuf,
-}
-
-impl Drop for Harness {
-    fn drop(&mut self) {
-        // Close the input side first, then terminate and reap the multiplexer.
-        // This path also runs when an assertion panics.
-        self.writer.take();
-        if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-        if let Some(done) = self.reader_done.take() {
-            let _ = done.recv_timeout(Duration::from_secs(1));
-        }
-        let _ = fs::remove_dir_all(&self.directory);
-    }
-}
-
 impl Harness {
     fn start() -> Self {
-        let directory = std::env::temp_dir().join(format!(
-            "multiplexer-live-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system clock")
-                .as_nanos()
-        ));
-        fs::create_dir_all(&directory).expect("create isolated live-session directory");
-        let pty = native_pty_system();
-        let pair = pty
-            .openpty(PtySize {
-                rows: 40,
-                cols: 120,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .expect("open controlling PTY");
-        let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_multiplexer"));
-        command.cwd(&directory);
-        command.env("SHELL", "/bin/sh");
-        let child = pair
-            .slave
-            .spawn_command(command)
-            .expect("start multiplexer");
-        let mut writer = pair.master.take_writer().expect("take PTY writer");
-        let mut reader = pair.master.try_clone_reader().expect("clone PTY reader");
-        drop(pair);
-
-        let (done_tx, done_rx) = mpsc::channel();
-        thread::spawn(move || {
-            let mut output = Vec::new();
-            let _ = reader.read_to_end(&mut output);
-            let _ = done_tx.send(());
-        });
-        writer.flush().expect("flush initial PTY writer");
-        Self {
-            child: Some(child),
-            writer: Some(writer),
-            reader_done: Some(done_rx),
-            directory,
-        }
-    }
-
-    fn send(&mut self, bytes: &[u8]) {
-        let writer = self.writer.as_mut().expect("PTY writer is alive");
-        writer.write_all(bytes).expect("write PTY input");
-        writer.flush().expect("flush PTY input");
-    }
-
-    fn command(&mut self, command: &str) {
-        let mut bytes = command.as_bytes().to_vec();
-        bytes.push(b'\n');
-        self.send(&bytes);
+        let mut harness = common::PtyHarness::spawn("multiplexer-live", 40, 120, &[]);
+        harness
+            .writer
+            .as_mut()
+            .expect("PTY writer is alive")
+            .flush()
+            .expect("flush initial PTY writer");
+        harness
     }
 
     fn wait_for_file(&self, name: &str) -> String {
@@ -103,7 +34,13 @@ impl Harness {
             }
             thread::sleep(Duration::from_millis(10));
         }
-        panic!("timed out waiting for nonempty marker {}", path.display());
+        let output = self.output.lock().expect("capture lock");
+        let tail_start = output.len().saturating_sub(2048);
+        panic!(
+            "timed out waiting for nonempty marker {}; PTY tail: {:?}",
+            path.display(),
+            String::from_utf8_lossy(&output[tail_start..])
+        );
     }
 
     fn assert_absent(&self, name: &str) {
@@ -182,20 +119,5 @@ fn live_processes_survive_stack_carry_and_broadcast_scope_is_exact() {
 
     // Quit through the explicit confirmation path; Drop remains the fallback
     // cleanup if any assertion above fails.
-    harness.send(&[0x02, b'q', b'y']);
-    let start = Instant::now();
-    while start.elapsed() < READY {
-        if harness
-            .child
-            .as_mut()
-            .expect("multiplexer child")
-            .try_wait()
-            .expect("poll multiplexer")
-            .is_some()
-        {
-            return;
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
-    panic!("multiplexer did not exit after confirmed quit");
+    harness.confirm_quit(READY);
 }

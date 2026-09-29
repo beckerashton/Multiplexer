@@ -1,14 +1,13 @@
 use std::{
     fs,
-    io::{Read, Write},
     os::unix::fs::PermissionsExt,
     path::PathBuf,
-    sync::{Arc, Mutex, mpsc},
     thread,
     time::{Duration, Instant},
 };
 
-use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
+mod common;
+use common::PtyHarness as Harness;
 
 const READY: Duration = Duration::from_secs(6);
 
@@ -33,97 +32,11 @@ impl Drop for HelperDirectory {
     }
 }
 
-struct Harness {
-    child: Option<Box<dyn Child + Send + Sync>>,
-    writer: Option<Box<dyn Write + Send>>,
-    reader_done: Option<mpsc::Receiver<()>>,
-    output: Arc<Mutex<Vec<u8>>>,
-    directory: PathBuf,
-}
-
-impl Drop for Harness {
-    fn drop(&mut self) {
-        self.writer.take();
-        if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-        if let Some(done) = self.reader_done.take() {
-            let _ = done.recv_timeout(Duration::from_secs(1));
-        }
-        let _ = fs::remove_dir_all(&self.directory);
-    }
-}
-
 impl Harness {
     fn start(env: &[(&str, &str)]) -> Self {
-        let directory = std::env::temp_dir().join(format!(
-            "multiplexer-clipboard-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system clock")
-                .as_nanos()
-        ));
-        fs::create_dir_all(&directory).expect("create isolated clipboard directory");
-        let pair = native_pty_system()
-            .openpty(PtySize {
-                rows: 40,
-                cols: 120,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .expect("open controlling PTY");
-        let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_multiplexer"));
-        command.cwd(&directory);
-        command.env("SHELL", "/bin/sh");
-        command.env("TERM", "xterm-256color");
-        command.env("NO_COLOR", "");
-        for &(name, value) in env {
-            command.env(name, value);
-        }
-        let child = pair
-            .slave
-            .spawn_command(command)
-            .expect("start multiplexer");
-        let writer = pair.master.take_writer().expect("take PTY writer");
-        let mut reader = pair.master.try_clone_reader().expect("clone PTY reader");
-        drop(pair);
-        let output = Arc::new(Mutex::new(Vec::new()));
-        let output_capture = Arc::clone(&output);
-        let (done_tx, done_rx) = mpsc::channel();
-        thread::spawn(move || {
-            let mut chunk = [0_u8; 4096];
-            while let Ok(count) = reader.read(&mut chunk) {
-                if count == 0 {
-                    break;
-                }
-                output_capture
-                    .lock()
-                    .expect("capture lock")
-                    .extend_from_slice(&chunk[..count]);
-            }
-            let _ = done_tx.send(());
-        });
-        Self {
-            child: Some(child),
-            writer: Some(writer),
-            reader_done: Some(done_rx),
-            output,
-            directory,
-        }
-    }
-
-    fn send(&mut self, bytes: &[u8]) {
-        let writer = self.writer.as_mut().expect("PTY writer is alive");
-        writer.write_all(bytes).expect("write PTY input");
-        writer.flush().expect("flush PTY input");
-    }
-
-    fn command(&mut self, command: &str) {
-        let mut bytes = command.as_bytes().to_vec();
-        bytes.push(b'\n');
-        self.send(&bytes);
+        let mut variables = vec![("TERM", "xterm-256color"), ("NO_COLOR", "")];
+        variables.extend_from_slice(env);
+        common::PtyHarness::spawn("multiplexer-clipboard", 40, 120, &variables)
     }
 
     fn wait_for_file(&self, name: &str, expected: Option<&[u8]>) {
@@ -191,25 +104,6 @@ impl Harness {
             parser.screen().contents()
         );
     }
-
-    fn confirm_quit(&mut self) {
-        self.send(&[0x02, b'q', b'y']);
-        let start = Instant::now();
-        while start.elapsed() < READY {
-            if self
-                .child
-                .as_mut()
-                .expect("multiplexer child")
-                .try_wait()
-                .expect("poll multiplexer")
-                .is_some()
-            {
-                return;
-            }
-            thread::sleep(Duration::from_millis(20));
-        }
-        panic!("multiplexer did not exit after confirmed quit");
-    }
 }
 
 fn helper_environment(directory: &std::path::Path) -> String {
@@ -251,7 +145,7 @@ fn vim_selection_yanks_to_clipboard_and_restores_shell_input() {
     harness.wait_for_path(&capture, Some(b"CLIP"));
     harness.command(": > after-yank");
     harness.wait_for_file("after-yank", None);
-    harness.confirm_quit();
+    harness.confirm_quit(READY);
 }
 
 #[test]
@@ -281,7 +175,7 @@ fn ordinary_sgr_mouse_bytes_reach_child_when_mouse_mode_is_enabled() {
     harness.send(b"\x1b[<64;3;3M");
     harness.wait_for_file("wheel-done", None);
     harness.wait_for_file("wheel-bytes", Some(b"\x1b[<64;2;1M"));
-    harness.confirm_quit();
+    harness.confirm_quit(READY);
 }
 
 #[test]
@@ -321,7 +215,7 @@ fn shell_wheel_scrollback_and_typing_returns_to_live_output() {
     harness.command("printf '\\033[2J\\033[HLIVE'; : > live-ready");
     harness.wait_for_file("live-ready", None);
     harness.wait_for_pane_text("LIVE");
-    harness.confirm_quit();
+    harness.confirm_quit(READY);
 }
 
 #[test]
@@ -340,11 +234,15 @@ fn selection_freezes_history_consumes_paste_and_copies_across_viewports() {
     // change the selection or reach the underlying shell.
     harness.send(b"\x1b[200~Gjunk\x1b[201~\x1bh\x1b[<64;3;3M");
     harness.send(b"y");
-    let expected: String = (0..=40).map(|i| format!("ROW-{i:03}\n")).collect();
+    use std::fmt::Write as _;
+    let mut expected = String::new();
+    for i in 0..=40 {
+        writeln!(expected, "ROW-{i:03}").unwrap();
+    }
     harness.wait_for_path(&capture, Some(expected.as_bytes()));
     harness.command(": > after-history-yank");
     harness.wait_for_file("after-history-yank", None);
-    harness.confirm_quit();
+    harness.confirm_quit(READY);
 }
 
 #[test]
@@ -369,7 +267,7 @@ fn selection_snapshot_stays_fixed_and_escape_returns_to_live_output() {
     harness.wait_for_screen("live output restored", |s| {
         s.contents().contains("NEW-LIVE-OUTPUT") && !s.contents().contains("SELECT VISUAL")
     });
-    harness.confirm_quit();
+    harness.confirm_quit(READY);
 }
 
 #[test]
@@ -394,5 +292,5 @@ fn failed_yank_keeps_selection_and_can_retry() {
     harness.wait_for_path(&directory.0.join("clipboard-capture"), Some(b"RETRY"));
     harness.command(": > after-retry");
     harness.wait_for_file("after-retry", None);
-    harness.confirm_quit();
+    harness.confirm_quit(READY);
 }

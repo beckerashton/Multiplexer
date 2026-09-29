@@ -237,7 +237,7 @@ impl Workspace {
                 }
             }
             for (tab, slot) in emptied {
-                self.reconcile_empty_slot(tab, slot, &mut Vec::new())?;
+                self.reconcile_empty_slot(tab, slot)?;
             }
         }
         self.prune_manual_broadcast_targets();
@@ -412,11 +412,7 @@ impl Workspace {
     fn focus(&mut self, direction: Direction) -> Result<Transition, DomainError> {
         let tab = self.active_tab_ref();
         let stack = &tab.stacks[&tab.focused_slot];
-        let member = stack.active_index().and_then(|active| match direction {
-            Direction::Up => active.checked_sub(1),
-            Direction::Down => (active + 1 < stack.sessions().len()).then_some(active + 1),
-            Direction::Left | Direction::Right => None,
-        });
+        let member = adjacent_stack_member(stack, direction);
         if let Some(index) = member {
             return self.select_stack_member(index);
         }
@@ -553,14 +549,10 @@ impl Workspace {
         let tab = self.active_tab_ref();
         let focused = tab.focused_slot;
         let stack = &tab.stacks[&focused];
-        let Some(active) = stack.active_index() else {
+        if stack.is_empty() {
             return Ok(Transition::unchanged());
-        };
-        let within = match direction {
-            Direction::Up => active.checked_sub(1),
-            Direction::Down => (active + 1 < stack.sessions().len()).then_some(active + 1),
-            _ => None,
-        };
+        }
+        let within = adjacent_stack_member(stack, direction);
         if let Some(index) = within {
             self.active_tab_mut()
                 .stacks
@@ -607,12 +599,7 @@ impl Workspace {
         let number = (1..)
             .find(|number| !self.tabs.iter().any(|tab| tab.number == *number))
             .unwrap();
-        let previous = self.active_tab;
-        let tab_id = self.create_empty_tab(number);
-        self.active_tab = tab_id;
-        self.prune_empty_tab(previous);
-        self.reset_broadcast_state();
-        self.add_to_focused_stack(spec)
+        self.create_tab_with_session(number, spec)
     }
 
     fn create_empty_tab(&mut self, number: usize) -> TabId {
@@ -637,12 +624,19 @@ impl Workspace {
         if let Some(tab) = self.tabs.iter().find(|tab| tab.number == number) {
             return self.select_tab(tab.id);
         }
+        self.create_tab_with_session(number, self.default_session.clone())
+    }
+
+    fn create_tab_with_session(
+        &mut self,
+        number: usize,
+        spec: SessionSpec,
+    ) -> Result<Transition, DomainError> {
         let previous = self.active_tab;
-        let id = self.create_empty_tab(number);
-        self.active_tab = id;
+        self.active_tab = self.create_empty_tab(number);
         self.prune_empty_tab(previous);
         self.reset_broadcast_state();
-        self.add_to_focused_stack(self.default_session.clone())
+        self.add_to_focused_stack(spec)
     }
 
     fn carry_to_number(
@@ -835,21 +829,12 @@ impl Workspace {
         if self.active_tab_ref().layout.slots().len() == 1 {
             return Err(DomainError::FinalSlotRemoval);
         }
-        let transfer_target = [
-            Direction::Right,
-            Direction::Left,
-            Direction::Down,
-            Direction::Up,
-        ]
-        .into_iter()
-        .find_map(|direction| {
-            self.active_tab_ref().layout.neighbor(
-                focused,
-                direction,
-                self.bounds,
-                self.minimum_pane_size,
-            )
-        });
+        let transfer_target = preferred_removal_neighbor(
+            &self.active_tab_ref().layout,
+            focused,
+            self.bounds,
+            self.minimum_pane_size,
+        );
         let removal = self.active_tab_mut().layout.remove(focused)?;
         let LayoutRemoval::Removed { neighbor } = removal else {
             return Err(DomainError::FinalSlotRemoval);
@@ -913,9 +898,9 @@ impl Workspace {
             .get_mut(&session)
             .expect("registered session")
             .state = SessionState::KillRequested;
-        let mut effects = vec![LifecycleEffect::Terminate { session }];
+        let effects = vec![LifecycleEffect::Terminate { session }];
         if emptied_slot {
-            self.reconcile_empty_slot(tab, slot, &mut effects)?;
+            self.reconcile_empty_slot(tab, slot)?;
         }
         Ok(Transition {
             effects,
@@ -951,11 +936,11 @@ impl Workspace {
                 .expect("registered session")
                 .state = SessionState::KillRequested;
         }
-        let mut effects = sessions
+        let effects = sessions
             .into_iter()
             .map(|session| LifecycleEffect::Terminate { session })
             .collect::<Vec<_>>();
-        self.reconcile_empty_slot(tab, slot, &mut effects)?;
+        self.reconcile_empty_slot(tab, slot)?;
         Ok(Transition {
             effects,
             changed: true,
@@ -1028,27 +1013,13 @@ impl Workspace {
             self.broadcast_scope = BroadcastScope::Focused;
         }
     }
-    fn reconcile_empty_slot(
-        &mut self,
-        tab_id: TabId,
-        slot: SlotId,
-        effects: &mut Vec<LifecycleEffect>,
-    ) -> Result<(), DomainError> {
+    fn reconcile_empty_slot(&mut self, tab_id: TabId, slot: SlotId) -> Result<(), DomainError> {
         let tab = self.tab(tab_id).ok_or(DomainError::UnknownTab(tab_id))?;
         if tab.layout.slots().len() == 1 {
             return Ok(());
         }
-        let target = [
-            Direction::Right,
-            Direction::Left,
-            Direction::Down,
-            Direction::Up,
-        ]
-        .into_iter()
-        .find_map(|direction| {
-            tab.layout
-                .neighbor(slot, direction, self.bounds, self.minimum_pane_size)
-        });
+        let target =
+            preferred_removal_neighbor(&tab.layout, slot, self.bounds, self.minimum_pane_size);
         let tab = self.tab_mut(tab_id).expect("tab exists");
         let removal = tab.layout.remove(slot)?;
         let LayoutRemoval::Removed { neighbor } = removal else {
@@ -1059,7 +1030,6 @@ impl Workspace {
         if tab.focused_slot == slot {
             tab.focused_slot = target.unwrap_or(neighbor);
         }
-        let _ = effects;
         Ok(())
     }
     fn allocate_tab(&mut self) -> TabId {
@@ -1095,4 +1065,28 @@ impl Workspace {
         let id = self.active_tab;
         self.tab_mut(id).expect("active tab exists")
     }
+}
+
+fn adjacent_stack_member(stack: &SlotStack, direction: Direction) -> Option<usize> {
+    stack.active_index().and_then(|active| match direction {
+        Direction::Up => active.checked_sub(1),
+        Direction::Down => (active + 1 < stack.sessions().len()).then_some(active + 1),
+        Direction::Left | Direction::Right => None,
+    })
+}
+
+fn preferred_removal_neighbor(
+    layout: &LayoutTree,
+    slot: SlotId,
+    bounds: CellRect,
+    minimum: CellRect,
+) -> Option<SlotId> {
+    [
+        Direction::Right,
+        Direction::Left,
+        Direction::Down,
+        Direction::Up,
+    ]
+    .into_iter()
+    .find_map(|direction| layout.neighbor(slot, direction, bounds, minimum))
 }

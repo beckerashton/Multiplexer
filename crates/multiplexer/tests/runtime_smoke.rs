@@ -43,6 +43,31 @@ fn wait_for_bytes(path: &PathBuf, expected: &[u8], deadline: Duration) -> bool {
     false
 }
 
+fn wait_for_output(
+    output_rx: &std::sync::mpsc::Receiver<Vec<u8>>,
+    expected: &[u8],
+    deadline: Duration,
+) -> bool {
+    let start = Instant::now();
+    let mut output = Vec::new();
+    while start.elapsed() < deadline {
+        let remaining = deadline.saturating_sub(start.elapsed());
+        match output_rx.recv_timeout(remaining) {
+            Ok(chunk) => {
+                output.extend(chunk);
+                if output
+                    .windows(expected.len())
+                    .any(|window| window == expected)
+                {
+                    return true;
+                }
+            }
+            Err(_) => return false,
+        }
+    }
+    false
+}
+
 #[test]
 fn shell_receives_exact_input_then_confirmed_quit_exits() {
     let directory = temporary_directory();
@@ -139,7 +164,6 @@ fn assert_raw_input(input: &[u8], expected: &[u8]) {
 fn assert_raw_input_mode(input: &[u8], expected: &[u8], application: bool) {
     let directory = temporary_directory();
     let marker = directory.join("escape-byte");
-    let ready = directory.join("escape-ready");
     let pty = native_pty_system();
     let pair = pty
         .openpty(PtySize {
@@ -158,19 +182,31 @@ fn assert_raw_input_mode(input: &[u8], expected: &[u8], application: bool) {
         .expect("start multiplexer");
     let mut writer = pair.master.take_writer().expect("PTY writer");
     let mut reader = pair.master.try_clone_reader().expect("PTY reader");
+    let (output_tx, output_rx) = std::sync::mpsc::channel();
     thread::spawn(move || {
         let mut discard = [0_u8; 4096];
-        while reader.read(&mut discard).is_ok() {}
+        loop {
+            match reader.read(&mut discard) {
+                Ok(0) | Err(_) => break,
+                Ok(count) => {
+                    if output_tx.send(discard[..count].to_vec()).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
     });
 
-    // Canonical shell input would wait for a newline and `dd` creates its
-    // destination before receiving a byte. Use a raw child reader and a
-    // separate ready marker so the assertion measures the application byte.
-    writer.write_all(format!("printf '\\033[?1{}'; stty raw -echo; : > escape-ready; dd bs=1 count={} of=escape-byte 2>/dev/null; stty sane\n", if application { "h" } else { "l" }, expected.len()).as_bytes()).unwrap();
+    // Wait for the marker to be rendered by the multiplexer after it processes
+    // the cursor-mode escape, then measure input in a raw child reader.
+    const READY: &[u8] = b"CURSOR-MODE-READY";
+    const READY_FORMAT: &str =
+        r"\103\125\122\123\117\122\055\115\117\104\105\055\122\105\101\104\131";
+    writer.write_all(format!("stty raw -echo; printf '\\033[?1{}'; printf '{}\\n'; dd bs=1 count={} of=escape-byte 2>/dev/null; stty sane\n", if application { "h" } else { "l" }, READY_FORMAT, expected.len()).as_bytes()).unwrap();
     writer.flush().unwrap();
     assert!(
-        wait_for(&ready, Duration::from_secs(2)),
-        "raw child did not become ready"
+        wait_for_output(&output_rx, READY, Duration::from_secs(2)),
+        "cursor-mode marker was not rendered"
     );
     writer.write_all(input).unwrap();
     writer.flush().unwrap();
