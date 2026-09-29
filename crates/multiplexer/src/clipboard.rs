@@ -4,7 +4,7 @@ use std::{
     process::{Command, Stdio},
 };
 
-/// Host clipboard selection. Wayland uses `wl-copy`; X11 attempts `xclip`
+/// Host clipboard selection. Wayland tries `wl-copy`, then X11 helpers. X11 tries `xclip`
 /// before `xsel`. The optional path is private and exists only to make helper
 /// discovery deterministic in tests without changing the user's environment.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -76,7 +76,11 @@ pub fn copy_with_helper(
     environment: &ClipboardEnvironment,
 ) -> Result<(), ClipboardError> {
     let candidates: &[(&str, &[&str])] = if environment.wayland {
-        &[("wl-copy", &[])]
+        &[
+            ("wl-copy", &[]),
+            ("xclip", &["-selection", "clipboard"]),
+            ("xsel", &["--clipboard", "--input"]),
+        ]
     } else {
         &[
             ("xclip", &["-selection", "clipboard"]),
@@ -116,7 +120,9 @@ fn invoke(
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(Stdio::piped());
+        // Clipboard owners may fork and retain stderr after their launcher
+        // exits. A pipe here makes wait_with_output block until ownership ends.
+        .stderr(Stdio::null());
     if let Some(path) = &environment.search_path {
         command.env("PATH", path);
     }
@@ -132,16 +138,13 @@ fn invoke(
             .write_all(text.as_bytes())
             .map_err(InvokeError::Input)?;
     }
-    let output = child.wait_with_output().map_err(InvokeError::Input)?;
-    if output.status.success() {
+    // Close stdin to signal EOF before waiting for the helper's launcher.
+    drop(child.stdin.take());
+    let status = child.wait().map_err(InvokeError::Input)?;
+    if status.success() {
         Ok(())
     } else {
-        let message = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        Err(InvokeError::Failed(if message.is_empty() {
-            output.status.to_string()
-        } else {
-            message
-        }))
+        Err(InvokeError::Failed(status.to_string()))
     }
 }
 
@@ -212,6 +215,29 @@ mod tests {
     }
 
     #[test]
+    fn copy_returns_while_background_clipboard_owner_keeps_stderr_open() {
+        let dir = HelperDir::new();
+        let helper = dir.helper("xclip", 0);
+        fs::write(
+            helper,
+            format!(
+                "#!/bin/sh\n/bin/cat > '{}'\n/bin/sleep 3 &\nexit 0\n",
+                dir.0.join("xclip.stdin").display()
+            ),
+        )
+        .unwrap();
+        let env = environment(&dir.0, false);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            tx.send(copy_with_helper("copied", &env)).unwrap();
+        });
+        let result = rx.recv_timeout(std::time::Duration::from_secs(1));
+        worker.join().unwrap();
+        result.expect("copy waited for the background clipboard owner").unwrap();
+        assert_eq!(dir.captured("xclip"), "copied");
+    }
+
+    #[test]
     fn x11_falls_back_from_failed_xclip_to_xsel() {
         let dir = HelperDir::new();
         dir.helper("xclip", 1);
@@ -222,10 +248,21 @@ mod tests {
     }
 
     #[test]
+    fn wayland_falls_back_to_x11_when_wl_copy_is_missing_or_fails() {
+        let dir = HelperDir::new();
+        dir.helper("xclip", 0);
+        copy_with_helper("missing", &environment(&dir.0, true)).unwrap();
+        assert_eq!(dir.captured("xclip"), "missing");
+        dir.helper("wl-copy", 1);
+        copy_with_helper("failed", &environment(&dir.0, true)).unwrap();
+        assert_eq!(dir.captured("xclip"), "failed");
+    }
+
+    #[test]
     fn missing_helper_is_reported_without_any_external_clipboard_write() {
         let dir = HelperDir::new();
         assert!(
-            matches!(copy_with_helper("kept", &environment(&dir.0, true)), Err(ClipboardError::NoHelper { attempted }) if attempted == vec!["wl-copy"])
+            matches!(copy_with_helper("kept", &environment(&dir.0, true)), Err(ClipboardError::NoHelper { attempted }) if attempted == vec!["wl-copy", "xclip", "xsel"])
         );
     }
 }

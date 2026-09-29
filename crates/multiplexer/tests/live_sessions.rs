@@ -150,7 +150,7 @@ fn live_processes_survive_stack_carry_and_broadcast_scope_is_exact() {
     harness.send(&[0x1b, b'1']);
 
     // Tab 1 has A and the visible C. B is hidden in the stack and D is in tab 2.
-    harness.send(&[0x02, b'b']);
+    harness.send(&[0x02, b'b', b'b']);
     harness.command("printf broadcast > broadcast-$$");
     harness.wait_for_file(&format!("broadcast-{pid_a}"));
     harness.wait_for_file(&format!("broadcast-{pid_c}"));

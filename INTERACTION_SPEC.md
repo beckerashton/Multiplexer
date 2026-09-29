@@ -39,7 +39,7 @@ a recognized multiplexer command is being entered.
 | `Alt-h/j/k/l` | Focus left/down/up/right | Up/down visits stack members before the spatial neighbor. Up/down at an outer edge wraps to the opposite edge in the same tab and column; a full-height stack cycles its own members. Left/right at an outer edge wraps to the previous/next populated tab. Empty tabs are skipped. Entry preserves the focused pane and displayed member. |
 | `Ctrl-Alt-h/j/k/l` | Move displayed member | Up/down reorders within the stack; at a spatial boundary, swaps displayed sessions with the neighbor and follows the moved session. |
 | `leader` then `Ctrl-Alt-h/j/k/l` | Swap whole stack | Swaps slots with the spatial neighbor, preserving stack order and active member. |
-| `leader Ctrl-h/j/k/l` | Resize focused pane left/down/up/right | Moves the selected shared boundary by one cell (5% when cell geometry is unavailable); clamps to minimum sizes. |
+| `leader r` | Enter persistent resize mode | `hjkl` pushes left/down/up/right by one cell; `HJKL` by five cells. Alt-hjkl retains focus navigation. Escape exits. Terminal edges and neighboring minimum sizes limit expansion. |
 | `leader \|` | Split vertically | Creates a left/right split at the focused slot, with the new terminal on the right. |
 | `leader -` | Split horizontally | Creates a top/bottom split at the focused slot, with the new terminal below. |
 | `leader a` | Add terminal to stack | Starts one session in the focused slot without changing the layout tree; the new session becomes active. |
@@ -52,11 +52,12 @@ a recognized multiplexer command is being entered.
 | `leader w` | Close tab | Sole tab is refused. Any live session requires confirmation; confirmation terminates sessions in that tab and closes it. |
 | `Ctrl-Alt-1` … `Ctrl-Alt-9` | Carry displayed member to tab 1 … 9 | Moves one session into its own pane; creates a missing destination without an extra shell. |
 | `leader` then `Ctrl-Alt-1` … `Ctrl-Alt-9` | Carry whole stack | Moves the complete stack, retaining its active member. |
-| `leader b` | Toggle all-visible broadcast | Targets the visible session in every slot of the current tab, including the focused slot. |
-| `leader B` | Toggle manual broadcast | Activates the current tab's explicitly selected target slots; refuses activation with an empty set. |
-| `leader m` | Toggle focused slot in manual set | Adds/removes that slot's currently visible session from the manual set. The set is visibly counted. |
-| `leader r` | Reset broadcast | Deactivates broadcast and clears all manual targets in the current tab. |
-| `leader y` | Copy selection | Runs the configured local clipboard helper for the current selection; no selection is a no-op with status feedback. |
+| `leader b` | Open broadcast submenu | Shows broadcast commands and waits for a command or Escape. Unknown keys leave the submenu open; a command closes it. |
+| `leader b b` | Toggle all-visible broadcast | Targets the visible session in every slot of the current tab, including the focused slot. |
+| `leader b B` | Toggle manual broadcast | Activates the current tab's explicitly selected target slots; refuses activation with an empty set. |
+| `leader b m` | Toggle focused slot in manual set | Adds/removes that slot's currently visible session from the manual set. The set is visibly counted. |
+| `leader b r` | Reset broadcast | Deactivates broadcast and clears all manual targets in the current tab. |
+| `leader y` | Enter selection mode | Freeze the focused pane and scrollback at the application cursor; navigate with Vim-style motions, select with v/V, yank with y, or cancel with Escape. |
 | `leader q` | Request quit | Starts an explicit confirmation before leaving the multiplexer and terminating its sessions. |
 
 The configuration must reject duplicate command bindings and must display the
@@ -178,14 +179,14 @@ each pane slot in the current tab contributes its visible stack member exactly
 once. Hidden stack members, every session in another tab, and sessions in
 removed or closed slots are excluded.
 
-Manual targets are explicit pane-slot selections made with `leader m`. The
+Manual targets are explicit pane-slot selections made with `leader b m`. The
 selection is displayed on each target slot and with a count in the status bar.
 The set is scoped to the current tab, is cleared on any tab change, and is
 resolved to the slot's currently visible session at send time. Thus cycling a
 targeted stack deliberately changes which visible session receives subsequent
 input; hidden members never receive broadcast by default. The focused slot is
 not implicitly added, so a manual set can intentionally exclude the origin
-session. Removing a targeted slot removes it from the set. `leader r` is the
+session. Removing a targeted slot removes it from the set. `leader b r` is the
 visible reset path.
 
 Broadcast mode has a persistent, high-contrast status-bar banner such as
@@ -201,22 +202,31 @@ rewrite bracketed-paste markers. Each PTY's terminal state determines how its
 application handles that byte sequence. A paste while a single leader is
 pending cancels the pending leader and sends the complete payload normally.
 
-## Mouse selection and clipboard
+## Keyboard selection and clipboard
 
-Pane management is keyboard-only in v1. Ordinary mouse reports, including
-wheel and application drag events, pass to the focused terminal application.
-When the terminal supplies SGR mouse reports with Shift held, Shift plus a
-left-button drag enters multiplexer text selection and suppresses those mouse
-reports from the application for the drag. Releasing the drag leaves the
-selection visible; `leader y` copies it. Terminals that intercept Shift-drag
-for their own selection continue to provide their native selection behavior.
+Leader `y` starts a frozen view of the focused session's retained terminal
+buffer at its application cursor. The PTY continues receiving output, which
+becomes visible again when selection mode closes. The viewport follows the
+selection cursor into scrollback. Terminal resizing cancels the mode.
 
-On Wayland, copy uses a configured local helper, defaulting to `wl-copy`; on
-X11 it tries `xclip` and then `xsel`. The helper receives UTF-8 selected text
-on standard input. Missing helpers produce an explicit status error while
-leaving the selection intact. OSC52 clipboard transport is deferred for a
-later version and is not silently attempted. Paste remains the host
-terminal's normal paste event and follows the raw-paste routing rule above.
+`hjkl` moves by cells, `w/b/e` by words, `0/^/$` to line start/first nonblank/end,
+and `gg/G` to the buffer start/end. Counts repeat motions; numbered gg/G moves
+to that buffer row. Ctrl-u/d moves half a page; Ctrl-b/f moves a full page.
+`v` anchors an inclusive character selection and `V` anchors whole physical
+lines. Repeating the same visual key clears the selection; switching visual
+kinds preserves its anchor. Wide and combining characters remain intact.
+Character selections preserve soft wraps without inserting extra newlines;
+whole-line selections include a trailing newline.
+
+`y` copies the selection (or current line without a visual selection) to the
+system clipboard and exits on success. Escape cancels. All other inputs,
+including paste, mouse reports and pane shortcuts, stay local to this mode.
+The status bar shows controls, buffer position and clipboard failures.
+
+On Wayland, copy tries `wl-copy`, then `xclip` and `xsel`; X11 tries `xclip`
+then `xsel`. Helpers receive selected UTF-8 text on stdin. Failure preserves
+selection for retry with `y`. OSC52 is not attempted. Outside selection mode,
+application mouse reports and host-terminal paste retain normal behavior.
 
 ## Indicators and platform limits
 
@@ -237,3 +247,5 @@ The v1 support target is Linux terminals that provide UTF-8, SGR mouse
 reports, and a normal PTY. Wayland/X11 clipboard helpers are optional runtime
 dependencies. The specification does not assume a desktop key-event API,
 OSC52 support, a particular terminal emulator, or a second input client.
+
+Related command families should use submenus as bindings expand. Resize and broadcast menus consume unbound keys and pasted text, without forwarding them to applications. Resize mode persists until Escape; broadcast selection closes its submenu.

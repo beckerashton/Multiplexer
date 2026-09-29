@@ -5,7 +5,7 @@ Manage Panes
 <alt> [/] ~ Previous / Next Pane
 <ctrl><alt> hjkl ~ Move Displayed Pane
 <leader> <ctrl><alt> hjkl ~ Swap Stacks
-<leader> <ctrl> hjkl ~ Resize Pane
+<leader> r ~ Resize Mode
 <leader> x/X ~ Kill Session / Stack
 
 Manage Stacks
@@ -19,13 +19,10 @@ Manage Tabs
 <leader> <ctrl><alt> 1-9 ~ Carry Stack to Tab
 
 Broadcast
-<leader> b ~ Toggle Visible Broadcast
-<leader> B ~ Toggle Manual Broadcast
-<leader> m ~ Toggle Manual Target
-<leader> r ~ Reset Broadcast
+<leader> b ~ Broadcast Menu
 
 Other
-<leader> y ~ Copy Selection
+<leader> y ~ Selection Mode
 <leader> q ~ Quit
 
-Maintenance: Keep similar functions and keybinds grouped as commands are added or changed. Display these groups in two columns, keeping each group together and wrapping entries within its column. Show effective configured bindings; only combine keys when the displayed shorthand remains accurate.
+Maintenance: Put related command families in submenus as bindings expand. Keep similar functions and keybinds grouped as commands are added or changed. Display these groups in two columns, keeping each group together and wrapping entries within its column. Show effective configured bindings; only combine keys when the displayed shorthand remains accurate.

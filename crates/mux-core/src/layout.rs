@@ -457,7 +457,10 @@ impl Node {
                     {
                         return Err(LayoutError::MinimumSize);
                     }
-                    *ratio = ((desired_first * LayoutTree::RATIO_SCALE as i32 + total / 2) / total)
+                    // Geometry floors the ratio back to cells. Round up here
+                    // so a requested outward step cannot disappear (or move
+                    // two cells on the left/top edge) on that conversion.
+                    *ratio = ((desired_first * LayoutTree::RATIO_SCALE as i32 + total - 1) / total)
                         .clamp(1, (LayoutTree::RATIO_SCALE - 1) as i32)
                         as u16;
                     return Ok(());

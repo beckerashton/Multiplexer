@@ -194,15 +194,25 @@ fn all_bindings_emit_expected_command_shapes() {
         })]
     );
     assert_eq!(
-        router.route(InputEvent::Bytes(vec![0x02, b'm']), &context(), &config),
+        router.route(
+            InputEvent::Bytes(vec![0x02, b'b', b'm']),
+            &context(),
+            &config
+        ),
         vec![
+            InputRoute::Consume,
             InputRoute::Consume,
             InputRoute::Command(WorkspaceCommand::ToggleManualBroadcastTarget(SlotId(7)))
         ]
     );
     assert_eq!(
-        router.route(InputEvent::Bytes(vec![0x02, b'r']), &context(), &config),
+        router.route(
+            InputEvent::Bytes(vec![0x02, b'b', b'r']),
+            &context(),
+            &config
+        ),
         vec![
+            InputRoute::Consume,
             InputRoute::Consume,
             InputRoute::Command(WorkspaceCommand::ResetBroadcast)
         ]
@@ -211,7 +221,7 @@ fn all_bindings_emit_expected_command_shapes() {
         router.route(InputEvent::Bytes(vec![0x02, b'y']), &context(), &config),
         vec![
             InputRoute::Consume,
-            InputRoute::Command(WorkspaceCommand::CopySelection)
+            InputRoute::Command(WorkspaceCommand::SelectionMode)
         ]
     );
     assert_eq!(
@@ -388,4 +398,146 @@ fn leader_promotes_member_movement_to_whole_stack_movement() {
         );
         assert!(!router.leader_pending());
     }
+}
+
+#[test]
+fn resize_mode_persists_for_small_large_and_alt_focus_steps_until_escape() {
+    let config = BindingConfig::default();
+    let mut router = InputRouter::new();
+    router.route(InputEvent::Bytes(b"\x02r".to_vec()), &context(), &config);
+    assert!(router.resize_mode());
+    assert!(!router.leader_pending());
+    for (key, direction) in [
+        (b'h', Direction::Left),
+        (b'j', Direction::Down),
+        (b'k', Direction::Up),
+        (b'l', Direction::Right),
+    ] {
+        for (bytes, command) in [
+            (
+                vec![key],
+                WorkspaceCommand::Resize {
+                    direction,
+                    cells: 1,
+                },
+            ),
+            (
+                vec![key.to_ascii_uppercase()],
+                WorkspaceCommand::Resize {
+                    direction,
+                    cells: 5,
+                },
+            ),
+            (
+                format!("\x1b[{};2u", key).into_bytes(),
+                WorkspaceCommand::Resize {
+                    direction,
+                    cells: 5,
+                },
+            ),
+            (vec![27, key], WorkspaceCommand::Focus(direction)),
+            (
+                format!("\x1b[{};3u", key).into_bytes(),
+                WorkspaceCommand::Focus(direction),
+            ),
+        ] {
+            assert_eq!(
+                router.route(InputEvent::Bytes(bytes), &context(), &config),
+                vec![InputRoute::Command(command)]
+            );
+            assert!(router.resize_mode());
+        }
+    }
+    router.route(InputEvent::Timeout, &context(), &config);
+    for event in [
+        InputEvent::Bytes(b"q\x02!\x1b[A".to_vec()),
+        InputEvent::Paste(b"hjkl\x1b".to_vec()),
+    ] {
+        let routes = router.route(event, &context(), &config);
+        assert!(routes.iter().all(|route| *route == InputRoute::Consume));
+        assert!(router.resize_mode());
+    }
+    router.route(InputEvent::Bytes(vec![27]), &context(), &config);
+    assert_eq!(
+        router.route(InputEvent::Timeout, &context(), &config),
+        vec![InputRoute::Consume]
+    );
+    assert!(!router.resize_mode());
+    assert_eq!(
+        router.route(InputEvent::Bytes(b"hjkl".to_vec()), &context(), &config),
+        vec![InputRoute::Forward(b"hjkl".to_vec())]
+    );
+}
+
+#[test]
+fn broadcast_submenu_waits_for_a_command_or_escape_without_forwarding() {
+    let config = BindingConfig::default();
+    for (key, command) in [
+        (
+            b'b',
+            WorkspaceCommand::SetBroadcastScope(BroadcastScope::VisibleTab),
+        ),
+        (
+            b'B',
+            WorkspaceCommand::SetBroadcastScope(BroadcastScope::Manual),
+        ),
+        (
+            b'm',
+            WorkspaceCommand::ToggleManualBroadcastTarget(SlotId(7)),
+        ),
+        (b'r', WorkspaceCommand::ResetBroadcast),
+    ] {
+        let mut router = InputRouter::new();
+        router.route(InputEvent::Bytes(b"\x02b".to_vec()), &context(), &config);
+        assert!(router.broadcast_pending());
+        assert!(!router.leader_pending());
+        router.route(InputEvent::Timeout, &context(), &config);
+        for event in [
+            InputEvent::Bytes(b"!\x1bh".to_vec()),
+            InputEvent::Paste(b"b".to_vec()),
+        ] {
+            assert!(
+                router
+                    .route(event, &context(), &config)
+                    .iter()
+                    .all(|route| *route == InputRoute::Consume)
+            );
+            assert!(router.broadcast_pending());
+        }
+        assert_eq!(
+            router.route(InputEvent::Bytes(vec![key]), &context(), &config),
+            vec![InputRoute::Command(command)]
+        );
+        assert!(!router.broadcast_pending());
+    }
+    let mut router = InputRouter::new();
+    router.route(
+        InputEvent::Bytes(b"\x02b\x1b[27u".to_vec()),
+        &context(),
+        &config,
+    );
+    assert!(!router.broadcast_pending());
+    assert_eq!(
+        router.route(InputEvent::Bytes(b"r".to_vec()), &context(), &config),
+        vec![InputRoute::Forward(b"r".to_vec())]
+    );
+}
+
+#[test]
+fn modal_entry_and_broadcast_commands_support_separate_binding_scopes() {
+    let mut config = BindingConfig::default();
+    config.rebind(b'z', BindingAction::ResizeMode).unwrap();
+    config.rebind(b'c', BindingAction::BroadcastMenu).unwrap();
+    config.rebind(b'z', BindingAction::ResetBroadcast).unwrap();
+    let mut router = InputRouter::new();
+    router.route(InputEvent::Bytes(b"\x02z".to_vec()), &context(), &config);
+    assert!(router.resize_mode());
+    router.route(InputEvent::Bytes(b"\x1b[27u".to_vec()), &context(), &config);
+    assert!(!router.resize_mode());
+    let routes = router.route(InputEvent::Bytes(b"\x02cz".to_vec()), &context(), &config);
+    assert_eq!(
+        routes.last(),
+        Some(&InputRoute::Command(WorkspaceCommand::ResetBroadcast))
+    );
+    assert!(!router.broadcast_pending());
 }

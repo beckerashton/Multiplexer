@@ -15,7 +15,7 @@ looks identical.
 | PASS-03 | Send `Ctrl-b` twice, then a sentinel command that reads `Ctrl-b`. | Exactly one leader byte reaches the focused PTY; no layout change occurs. |
 | PASS-04 | Open leader mode, wait beyond one second, then enter an unbound key, a command, and Escape in separate attempts. | Waiting and unbound keys keep the grouped popup open; a command executes and closes it; Escape cancels without forwarding the leader. |
 | PASS-05 | Send `Ctrl-Alt-h/j/k/l` for neighboring slots containing distinct session markers. | Slot geometry/focus is swapped in the selected direction; every session ID, PID/start time, marker, and scrollback is unchanged. |
-| PASS-06 | Resize each side of a split repeatedly with leader plus `Ctrl-h/j/k/l`. | The intended shared boundary moves one cell per repeat, clamps at minimum sizes, and never changes any session identity. |
+| PASS-06 | Resize each side of a split repeatedly with leader `r`, then `hjkl` / `HJKL`; use Alt-hjkl to change focus and Escape to exit. | The intended shared boundary moves one cell (five with Shift) per repeat, clamps at minimum sizes, and never changes any session identity. |
 | PASS-07 | Split with `leader |` and `leader -`; record both child identities. | New sessions appear in right and below positions respectively; the original session remains the same process. |
 | PASS-08 | Add two sessions with `leader a`, cycle with `[` and `]`, and select stack positions `1` through `9`. | Only the visible member changes; stack order and all session IDs/PIDs remain stable; out-of-range selection is a no-op. |
 | PASS-09 | Swap a slot containing a three-session stack with a slot containing one session, then cycle both stacks. | Complete stack objects exchange positions; active indices, member order, session IDs, PIDs, and scrollback survive. |
@@ -29,12 +29,12 @@ looks identical.
 | PASS-17 | Select tabs with `Alt-1` through `Alt-9`, including an ESC-prefixed digit sequence, while each tab has a distinct marker. | The matching tab is selected and its layout/focus/processes are preserved; the documented 50 ms ESC/Alt rule is deterministic. |
 | PASS-18 | Send standalone `Esc`, fast `Esc` plus a non-digit, and `Esc` plus a delayed digit to an application. | Standalone and unbound non-digit sequences reach the PTY as application input; delayed digits do not become tab selection; disabled Alt-number parsing passes Alt-digits through while directional shortcuts remain active. |
 | PASS-19 | Activate all-visible broadcast in a tab with three slots, each with a two-session stack, and one unrelated tab. Send text and paste bytes containing `Ctrl-b`. | Exactly the three visible sessions in the current tab receive identical raw bytes; hidden members, every other tab, and the multiplexer command parser receive none. |
-| PASS-20 | Select two manual targets with `leader m` while deliberately excluding the focused slot, activate `leader B`, then switch a targeted stack member and send text. | Only explicitly marked slots receive input; the focused origin is excluded; after cycling, the currently visible member of that targeted slot receives it; hidden members do not. |
+| PASS-20 | Select two manual targets with `leader b m` while deliberately excluding the focused slot, activate `leader b B`, then switch a targeted stack member and send text. | Only explicitly marked slots receive input; the focused origin is excluded; after cycling, the currently visible member of that targeted slot receives it; hidden members do not. |
 | PASS-21 | Change tabs while all-visible or manual broadcast is active, then type. | Broadcast is off, manual targets are cleared, and only the newly focused session receives input. The status banner and markers disappear. |
 | PASS-22 | Remove a manually targeted slot, kill its active session, and exit another target process. | Removed/dead targets are removed from the set; if no target remains broadcast turns off with a visible reason; no input leaks to another tab. |
 | PASS-23 | With broadcast active, issue focus, split, carry, kill confirmation responses, and tab commands. | Multiplexer actions and confirmations are local; none is written to target PTYs. |
 | PASS-24 | Inject a raw paste payload containing newlines, `Esc`, leader bytes, and bracketed-paste markers. | The exact payload is sent once to every current target, with no added newline, leader interpretation, or marker rewriting. |
-| PASS-25 | With SGR mouse enabled, perform Shift-left drag and copy; perform an unmodified drag/wheel in an application that enables mouse reporting. | Shift drag selects visible text and suppresses only that drag; `leader y` invokes the configured helper. Unmodified events reach the application unchanged. |
+| PASS-25 | Enter leader y, navigate across scrollback with Vim-style motions and counts, select with v/V, and yank with y. Cancel a second selection with Escape while output continues. | The selected text and cursor are highlighted in a frozen buffer; copy reaches the clipboard; all mode input stays local; live output resumes after yank/cancel. |
 | PASS-26 | Run copy under Wayland with `wl-copy`, under X11 with `xclip` or `xsel`, and with no helper installed. | Selected UTF-8 text reaches the available helper; fallback order works; missing helper reports an error and keeps the selection. OSC52 is never required. |
 | PASS-27 | Change the configured leader and several bindings, restart, and inspect the help/status view. | New bindings are effective, duplicate bindings are rejected, the effective table is visible, and ordinary pass-through remains the default. |
 | PASS-28 | Run all layout operations while a long-lived sentinel, SSH-like process, and Codex-like process continue producing output. | No focus, resize, swap, stack, carry, or removal operation restarts or disconnects a process; output and scrollback remain attributable to the same session IDs. |
@@ -45,8 +45,8 @@ looks identical.
 
 The release candidate must pass every row that applies to the configured
 terminal. PASS-17 and PASS-18 must be run both with the default ESC/Alt parser
-and with it disabled. PASS-25 must cover a terminal that reports SGR mouse
-events and one that performs its own Shift selection. Clipboard helper tests
+and with it disabled. PASS-25 must cover scrollback, wide and combining characters, soft-wrapped
+rows, clipboard failure/retry, and suppressed paste and mouse input. Clipboard helper tests
 must not treat OSC52 as a passing substitute.
 
 Any failure that shows a changed session ID, child PID/start time, or missing

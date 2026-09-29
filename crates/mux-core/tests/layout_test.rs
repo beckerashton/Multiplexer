@@ -132,3 +132,78 @@ fn vertical_wrap_stays_in_column_and_preserves_full_height_panes() {
         Some(SlotId(2))
     );
 }
+
+#[test]
+fn every_resize_pushes_the_requested_edge_out_by_one_cell() {
+    for (axis, forward, backward) in [
+        (Axis::Vertical, Direction::Right, Direction::Left),
+        (Axis::Horizontal, Direction::Down, Direction::Up),
+    ] {
+        for span in 24..=400 {
+            let area = CellRect {
+                x: 4,
+                y: 2,
+                cols: span,
+                rows: span,
+            };
+            for (slot, direction) in [(SlotId(1), forward), (SlotId(2), backward)] {
+                let mut tree = LayoutTree::new(SlotId(1));
+                tree.split(SlotId(1), axis, 500, SlotId(2)).unwrap();
+                for _ in 0..3 {
+                    let before = tree.geometry(area, MIN)[&slot];
+                    tree.resize(slot, direction, 1, area, MIN).unwrap();
+                    let after = tree.geometry(area, MIN)[&slot];
+                    match direction {
+                        Direction::Right => {
+                            assert_eq!(after.x, before.x);
+                            assert_eq!(after.cols, before.cols + 1, "span {span}");
+                        }
+                        Direction::Left => {
+                            assert_eq!(after.x + 1, before.x, "span {span}");
+                            assert_eq!(after.x + after.cols, before.x + before.cols);
+                        }
+                        Direction::Down => {
+                            assert_eq!(after.y, before.y);
+                            assert_eq!(after.rows, before.rows + 1, "span {span}");
+                        }
+                        Direction::Up => {
+                            assert_eq!(after.y + 1, before.y, "span {span}");
+                            assert_eq!(after.y + after.rows, before.y + before.rows);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn nested_resize_uses_selected_side_and_outer_edges_do_not_move() {
+    let mut tree = LayoutTree::new(SlotId(1));
+    tree.split(SlotId(1), Axis::Vertical, 500, SlotId(2))
+        .unwrap();
+    tree.split(SlotId(1), Axis::Horizontal, 500, SlotId(3))
+        .unwrap();
+    tree.split(SlotId(3), Axis::Vertical, 500, SlotId(4))
+        .unwrap();
+    for direction in [Direction::Left, Direction::Right, Direction::Up] {
+        let before = tree.geometry(bounds(), MIN)[&SlotId(4)];
+        tree.resize(SlotId(4), direction, 1, bounds(), MIN).unwrap();
+        let after = tree.geometry(bounds(), MIN)[&SlotId(4)];
+        match direction {
+            Direction::Left => assert_eq!(after.x, before.x - 1),
+            Direction::Right => assert_eq!(after.x + after.cols, before.x + before.cols + 1),
+            Direction::Up => assert_eq!(after.y, before.y - 1),
+            _ => unreachable!(),
+        }
+    }
+    let before = tree.clone();
+    assert_eq!(
+        tree.resize(SlotId(4), Direction::Down, 1, bounds(), MIN),
+        Err(LayoutError::NoNeighbor {
+            slot: SlotId(4),
+            direction: Direction::Down
+        })
+    );
+    assert_eq!(tree, before);
+}

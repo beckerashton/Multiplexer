@@ -7,6 +7,7 @@ mod raw_input;
 mod render;
 mod runtime_config;
 mod selection;
+mod selection_mode;
 mod terminal_guard;
 
 use std::{
@@ -27,11 +28,8 @@ use mux_core::{
 };
 use raw_input::RawInput;
 use runtime_config::RuntimeConfig;
-use selection::Selection;
-use selection::selected_text;
-use std::cell::RefCell;
+use selection_mode::{Outcome as SelectionOutcome, SelectionMode};
 
-thread_local! { static CURRENT_SELECTION: RefCell<Option<Selection>> = const { RefCell::new(None) }; }
 use terminal_guard::TerminalGuard;
 
 const INPUT_TICK: Duration = Duration::from_millis(16);
@@ -85,7 +83,7 @@ fn run(_guard: TerminalGuard, config: BindingConfig) -> Result<(), Box<dyn std::
     let mut mouse = SgrDecoder::default();
     let mut keyboard = keyboard::KeyboardDecoder::default();
     let mut mouse_deadline = None;
-    let mut selection: Option<Selection> = None;
+    let mut selection_mode: Option<SelectionMode> = None;
     let mut router_deadline = None;
     let mut pending_deadline = None;
     let mut quit_deadline = None;
@@ -123,6 +121,12 @@ fn run(_guard: TerminalGuard, config: BindingConfig) -> Result<(), Box<dyn std::
         for event in events {
             match event {
                 TerminalEvent::Exited { session, code } => {
+                    if selection_mode
+                        .as_ref()
+                        .is_some_and(|mode| mode.session == session)
+                    {
+                        selection_mode = None;
+                    }
                     dirty = true;
                     let _ = workspace.session_state_changed(session, SessionState::Exited);
                     status = format!("session {} exited ({code})", session.0);
@@ -136,7 +140,12 @@ fn run(_guard: TerminalGuard, config: BindingConfig) -> Result<(), Box<dyn std::
         }
         let previous_bounds = workspace.view().bounds;
         sync_bounds(&mut workspace)?;
-        dirty |= workspace.view().bounds != previous_bounds;
+        if workspace.view().bounds != previous_bounds {
+            if selection_mode.take().is_some() {
+                status = "selection cancelled after terminal resize".into();
+            }
+            dirty = true;
+        }
         if dirty {
             renderer.draw(
                 &workspace,
@@ -145,7 +154,7 @@ fn run(_guard: TerminalGuard, config: BindingConfig) -> Result<(), Box<dyn std::
                 &config,
                 &status,
                 quit_deadline.is_some(),
-                selection.as_ref(),
+                selection_mode.as_ref(),
             )?;
             dirty = false;
         }
@@ -175,6 +184,7 @@ fn run(_guard: TerminalGuard, config: BindingConfig) -> Result<(), Box<dyn std::
                                             &mut workspace,
                                             &mut backend,
                                             &mut router,
+                                            &mut selection_mode,
                                             &config,
                                             &default_session,
                                             &mut status,
@@ -186,22 +196,25 @@ fn run(_guard: TerminalGuard, config: BindingConfig) -> Result<(), Box<dyn std::
                                     }
                                 }
                                 MouseFrame::Mouse(event) => {
-                                    let previous_selection = selection;
+                                    if selection_mode.is_some() {
+                                        continue;
+                                    }
                                     let previous_status = status.clone();
-                                    if event.shift && event.button == 0 {
-                                        update_selection(
-                                            &workspace,
-                                            &backend,
-                                            &event,
-                                            &mut selection,
-                                        )
-                                    } else if workspace.view().pending_confirmation.is_none()
+                                    if workspace.view().pending_confirmation.is_none()
                                         && quit_deadline.is_none()
                                     {
-                                        forward_mouse(&workspace, &backend, &event, &mut status);
+                                        if scroll_mouse(&workspace, &mut backend, &event) {
+                                            dirty = true;
+                                        } else {
+                                            forward_mouse(
+                                                &workspace,
+                                                &backend,
+                                                &event,
+                                                &mut status,
+                                            );
+                                        }
                                     }
-                                    dirty |= selection != previous_selection
-                                        || status != previous_status;
+                                    dirty |= status != previous_status;
                                 }
                             }
                         }
@@ -216,6 +229,7 @@ fn run(_guard: TerminalGuard, config: BindingConfig) -> Result<(), Box<dyn std::
                             &mut workspace,
                             &mut backend,
                             &mut router,
+                            &mut selection_mode,
                             &config,
                             &default_session,
                             &mut status,
@@ -237,6 +251,7 @@ fn run(_guard: TerminalGuard, config: BindingConfig) -> Result<(), Box<dyn std::
                         &mut workspace,
                         &mut backend,
                         &mut router,
+                        &mut selection_mode,
                         &config,
                         &default_session,
                         &mut status,
@@ -257,6 +272,7 @@ fn run(_guard: TerminalGuard, config: BindingConfig) -> Result<(), Box<dyn std::
                                 &mut workspace,
                                 &mut backend,
                                 &mut router,
+                                &mut selection_mode,
                                 &config,
                                 &default_session,
                                 &mut status,
@@ -273,6 +289,7 @@ fn run(_guard: TerminalGuard, config: BindingConfig) -> Result<(), Box<dyn std::
                             &mut workspace,
                             &mut backend,
                             &mut router,
+                            &mut selection_mode,
                             &config,
                             &default_session,
                             &mut status,
@@ -292,6 +309,7 @@ fn run(_guard: TerminalGuard, config: BindingConfig) -> Result<(), Box<dyn std::
                             &mut workspace,
                             &mut backend,
                             &mut router,
+                            &mut selection_mode,
                             &config,
                             &default_session,
                             &mut status,
@@ -306,6 +324,7 @@ fn run(_guard: TerminalGuard, config: BindingConfig) -> Result<(), Box<dyn std::
                         &mut workspace,
                         &mut backend,
                         &mut router,
+                        &mut selection_mode,
                         &config,
                         &default_session,
                         &mut status,
@@ -339,12 +358,36 @@ fn handle_event(
     workspace: &mut Workspace,
     backend: &mut TerminalBackend,
     router: &mut mux_core::InputRouter,
+    selection_mode: &mut Option<SelectionMode>,
     config: &BindingConfig,
     default_session: &SessionSpec,
     status: &mut String,
     pending_deadline: &mut Option<Instant>,
     quit_deadline: &mut Option<Instant>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
+    if let Some(mode) = selection_mode.as_mut() {
+        if let InputEvent::Bytes(bytes) = &event {
+            match mode.input(bytes) {
+                SelectionOutcome::Continue => {}
+                SelectionOutcome::Cancel => {
+                    *selection_mode = None;
+                    *status = "selection cancelled".into();
+                }
+                SelectionOutcome::Yank(text) => {
+                    match copy_with_helper(&text, &ClipboardEnvironment::default()) {
+                        Ok(()) => {
+                            *selection_mode = None;
+                            *status = "selection copied".into();
+                        }
+                        Err(error) => {
+                            *status = format!("copy failed: {error}; y retries, Esc cancels")
+                        }
+                    }
+                }
+            }
+        }
+        return Ok(false);
+    }
     // InputRouter intentionally stops after a command so callers can refresh
     // workspace context. Feeding a host chunk one byte at a time gives the
     // confirmation layer first chance at bytes following that command (for
@@ -357,6 +400,7 @@ fn handle_event(
                     workspace,
                     backend,
                     router,
+                    selection_mode,
                     config,
                     default_session,
                     status,
@@ -432,6 +476,7 @@ fn handle_event(
                                 .is_some_and(|screen| screen.application_cursor()),
                         )
                     };
+                    backend.set_scrollback(session, 0);
                     if let Err(error) = backend.write(session, &input) {
                         *status = format!("session {} write failed: {error}", session.0);
                     }
@@ -441,20 +486,26 @@ fn handle_event(
                 *quit_deadline = Some(Instant::now() + CONFIRM_TIMEOUT);
                 *status = "quit multiplexer? y/n".into();
             }
-            InputRoute::Command(WorkspaceCommand::CopySelection) => {
-                let text = CURRENT_SELECTION.with(|stored| {
-                    stored.borrow().as_ref().and_then(|selection| {
-                        backend
-                            .screen(selection.session)
-                            .map(|screen| selected_text(screen, selection))
-                    })
+            InputRoute::Command(WorkspaceCommand::SelectionMode) => {
+                let view = workspace.view();
+                let tab = view
+                    .tabs
+                    .iter()
+                    .find(|tab| tab.id == view.active_tab)
+                    .expect("active tab");
+                let session = tab.slots.get(&tab.focused_slot).and_then(|slot| {
+                    slot.stack
+                        .active
+                        .and_then(|index| slot.stack.sessions.get(index))
+                        .copied()
                 });
-                match text.filter(|text| !text.is_empty()) {
-                    Some(text) => match copy_with_helper(&text, &ClipboardEnvironment::default()) {
-                        Ok(()) => *status = "selection copied".into(),
-                        Err(error) => *status = format!("copy failed: {error}"),
-                    },
-                    None => *status = "no Shift selection to copy".into(),
+                if let Some((session, screen)) =
+                    session.and_then(|id| backend.screen(id).map(|screen| (id, screen)))
+                {
+                    *selection_mode = Some(SelectionMode::new(session, screen));
+                    *status = String::new();
+                } else {
+                    *status = "no pane buffer to select".into();
                 }
             }
             InputRoute::Command(command) => {
@@ -558,14 +609,16 @@ fn sync_bounds(workspace: &mut Workspace) -> io::Result<()> {
     Ok(())
 }
 
-fn update_selection(
+/// Wheel scrolling belongs to the pane under the pointer. Applications that
+/// request mouse input retain their wheel events; Shift overrides this on the
+/// normal screen. Alternate-screen applications own their own history.
+fn scroll_mouse(
     workspace: &Workspace,
-    backend: &TerminalBackend,
+    backend: &mut TerminalBackend,
     event: &mouse::MouseEvent,
-    selection: &mut Option<Selection>,
-) {
-    if !event.shift || event.button != 0 || event.code & 64 != 0 {
-        return;
+) -> bool {
+    if !event.press || event.motion || event.code & 64 == 0 || event.button > 1 {
+        return false;
     }
     let view = workspace.view();
     let tab = view
@@ -573,49 +626,39 @@ fn update_selection(
         .iter()
         .find(|tab| tab.id == view.active_tab)
         .expect("active tab");
-    let bounds = view.bounds;
-    let Some(rect) = tab
-        .layout
-        .geometry(bounds, view.minimum_pane_size)
-        .get(&tab.focused_slot)
-        .copied()
-    else {
-        return;
-    };
-    let Some(slot) = tab.slots.get(&tab.focused_slot) else {
-        return;
-    };
-    let rect = pane_geometry::content(pane_geometry::stack_frame(rect, &slot.stack));
-    if !pane_geometry::contains(rect, event.x, event.y) {
-        return;
+    for (slot_id, rect) in tab.layout.geometry(view.bounds, view.minimum_pane_size) {
+        let Some(slot) = tab.slots.get(&slot_id) else {
+            continue;
+        };
+        let inner = pane_geometry::content(pane_geometry::stack_frame(rect, &slot.stack));
+        if !pane_geometry::contains(inner, event.x, event.y) {
+            continue;
+        }
+        let Some(session) = slot
+            .stack
+            .active
+            .and_then(|index| slot.stack.sessions.get(index))
+            .copied()
+        else {
+            continue;
+        };
+        let Some(screen) = backend.screen(session) else {
+            continue;
+        };
+        if screen.alternate_screen()
+            || (!event.shift && screen.mouse_protocol_mode() != vt100::MouseProtocolMode::None)
+        {
+            return false;
+        }
+        let offset = if event.button == 0 {
+            screen.scrollback().saturating_add(3)
+        } else {
+            screen.scrollback().saturating_sub(3)
+        };
+        backend.set_scrollback(session, offset);
+        return true;
     }
-    let Some(session) = slot
-        .stack
-        .active
-        .and_then(|index| slot.stack.sessions.get(index))
-        .copied()
-    else {
-        return;
-    };
-    if backend.screen(session).is_none() {
-        return;
-    }
-    let point = (event.x - rect.x, event.y - rect.y);
-    if event.press && !event.motion {
-        *selection = Some(Selection {
-            session,
-            start: point,
-            end: point,
-        });
-    } else if let Some(current) = selection
-        .as_mut()
-        .filter(|current| current.session == session)
-    {
-        current.end = point;
-    } else {
-        return;
-    }
-    CURRENT_SELECTION.with(|stored| *stored.borrow_mut() = *selection);
+    false
 }
 
 fn forward_mouse(

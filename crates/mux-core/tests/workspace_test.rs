@@ -651,3 +651,73 @@ fn directional_edges_and_pane_jumps_wrap_populated_tabs_and_restore_selection() 
         );
     }
 }
+
+#[test]
+fn resizing_a_stack_moves_its_edge_without_changing_members() {
+    let (mut workspace, _) = Workspace::new(shell("one"));
+    workspace.set_bounds(CellRect {
+        x: 0,
+        y: 0,
+        cols: 137,
+        rows: 41,
+    });
+    workspace
+        .execute(WorkspaceCommand::SplitFocused {
+            axis: Axis::Vertical,
+            session: shell("two"),
+        })
+        .unwrap();
+    workspace
+        .execute(WorkspaceCommand::AddToFocusedStack {
+            session: shell("three"),
+        })
+        .unwrap();
+    let before = workspace.view();
+    let tab = active_tab(&before);
+    let slot = tab.focused_slot;
+    let original_stack = tab.slots[&slot].stack.clone();
+    let rect = tab.layout.geometry(before.bounds, before.minimum_pane_size)[&slot];
+    for step in 1..=5 {
+        workspace
+            .execute(WorkspaceCommand::Resize {
+                direction: Direction::Left,
+                cells: 1,
+            })
+            .unwrap();
+        let after = workspace.view();
+        let tab = active_tab(&after);
+        let resized = tab.layout.geometry(after.bounds, after.minimum_pane_size)[&slot];
+        assert_eq!(resized.x, rect.x - step);
+        assert_eq!(resized.cols, rect.cols + step);
+        assert_eq!(tab.slots[&slot].stack, original_stack);
+        assert_eq!(after.sessions, before.sessions);
+    }
+}
+
+#[test]
+fn large_resize_steps_use_remaining_space_at_minimum_sizes() {
+    let (mut workspace, _) = Workspace::new(shell("one"));
+    workspace.set_bounds(CellRect {
+        x: 0,
+        y: 0,
+        cols: 22,
+        rows: 20,
+    });
+    workspace
+        .execute(WorkspaceCommand::SplitFocused {
+            axis: Axis::Vertical,
+            session: shell("two"),
+        })
+        .unwrap();
+    workspace
+        .execute(WorkspaceCommand::Resize {
+            direction: Direction::Left,
+            cells: 5,
+        })
+        .unwrap();
+    let view = workspace.view();
+    let tab = active_tab(&view);
+    let rect = tab.layout.geometry(view.bounds, view.minimum_pane_size)[&tab.focused_slot];
+    assert_eq!(rect.x, view.minimum_pane_size.cols);
+    assert_eq!(rect.cols, 22 - view.minimum_pane_size.cols);
+}

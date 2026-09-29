@@ -107,7 +107,7 @@ pub enum WorkspaceCommand {
     SetBroadcastScope(BroadcastScope),
     ToggleManualBroadcastTarget(SlotId),
     ResetBroadcast,
-    CopySelection,
+    SelectionMode,
     /// Runtime-only destructive action. The terminal host must obtain a
     /// second explicit confirmation before leaving raw/alternate-screen mode.
     RequestQuit,

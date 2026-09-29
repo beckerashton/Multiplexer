@@ -74,6 +74,13 @@ impl RuntimeConfig {
                 value: key_text.clone(),
                 reason,
             })?;
+            if action.is_broadcast() && (key.0 != 0 || key.1 == 0x1b) {
+                return Err(RuntimeConfigError::Binding {
+                    name: name.clone(),
+                    reason: "broadcast submenu commands need an unmodified key other than Escape"
+                        .into(),
+                });
+            }
             parsed_bindings.push((name.clone(), key, action));
         }
         // Remove every overridden action before assigning custom keys. This
@@ -301,6 +308,12 @@ impl RuntimeConfig {
         );
         add(
             "Manage Panes",
+            singles(&[(ResizeMode, "Resize Mode")]),
+            "r",
+            "Resize Mode",
+        );
+        add(
+            "Manage Panes",
             directions(Resize, "Resize Pane"),
             "hjkl",
             "Resize Pane",
@@ -359,6 +372,12 @@ impl RuntimeConfig {
             "",
         );
 
+        add(
+            "Broadcast",
+            singles(&[(BroadcastMenu, "Broadcast Menu")]),
+            "b",
+            "Broadcast Menu",
+        );
         for (action, key, label) in [
             (BroadcastVisible, "b", "Toggle Visible Broadcast"),
             (BroadcastManual, "B", "Toggle Manual Broadcast"),
@@ -369,9 +388,9 @@ impl RuntimeConfig {
         }
         add(
             "Other",
-            singles(&[(CopySelection, "Copy Selection")]),
+            singles(&[(SelectionMode, "Selection Mode")]),
             "y",
-            "Copy Selection",
+            "Selection Mode",
         );
         add("Other", singles(&[(Quit, "Quit")]), "q", "Quit");
 
@@ -397,6 +416,41 @@ impl RuntimeConfig {
             if let Some(rows) = groups.remove(group) {
                 lines.push((group.to_owned(), true));
                 lines.extend(rows.into_iter().map(|row| (row, false)));
+            }
+        }
+        lines
+    }
+
+    pub fn broadcast_help(&self) -> Vec<(String, bool)> {
+        let mut lines = vec![("Broadcast".into(), true)];
+        for (key, action) in self.bindings.broadcast_bindings() {
+            let label = match action {
+                BindingAction::BroadcastVisible => "Toggle Visible Broadcast",
+                BindingAction::BroadcastManual => "Toggle Manual Broadcast",
+                BindingAction::ToggleManualTarget => "Toggle Manual Target",
+                BindingAction::ResetBroadcast => "Reset Broadcast",
+                _ => continue,
+            };
+            lines.push((format!("{} ~ {label}", format_key(*key)), false));
+        }
+        lines
+    }
+
+    pub fn resize_help(&self) -> Vec<(String, bool)> {
+        let mut lines = vec![
+            ("Resize Mode".into(), true),
+            ("h/j/k/l ~ Left / Down / Up / Right (1 cell)".into(), false),
+            ("H/J/K/L ~ Left / Down / Up / Right (5 cells)".into(), false),
+            ("Change Focus".into(), true),
+        ];
+        for ((mods, key), action) in self.bindings.modified_bindings() {
+            if *mods == 3 {
+                if let BindingAction::Focus(direction) = action {
+                    lines.push((
+                        format!("Alt-{} ~ Focus {direction:?}", format_key(*key)),
+                        false,
+                    ));
+                }
             }
         }
         lines
@@ -440,6 +494,22 @@ impl RuntimeConfig {
                 action_name(*action)
             ));
         }
+        for (menu_key, action) in config.bindings() {
+            if *action == BindingAction::BroadcastMenu {
+                for (key, action) in config.broadcast_bindings() {
+                    lines.push(format!(
+                        "leader {} {}: {}",
+                        format_key(*menu_key),
+                        format_key(*key),
+                        action_name(*action)
+                    ));
+                }
+            }
+        }
+        lines.push(
+            "resize mode: hjkl = 1 cell; HJKL = 5 cells; Alt-hjkl = focus; Esc = exit".into(),
+        );
+        lines.push("selection mode: hjkl w/b/e 0/^/$ gg/G; counts; Ctrl-u/d/b/f pages; v/V select; y yank; Esc cancel".into());
         lines
     }
 }
@@ -490,6 +560,9 @@ fn parse_action(name: &str) -> Result<BindingAction, String> {
             .map(BindingAction::SwapMember)
             .ok_or_else(|| "unknown swap direction".into());
     }
+    if normalized == "resize_mode" {
+        return Ok(BindingAction::ResizeMode);
+    }
     if let Some(suffix) = normalized.strip_prefix("resize_") {
         return direction(suffix)
             .map(BindingAction::Resize)
@@ -515,11 +588,12 @@ fn parse_action(name: &str) -> Result<BindingAction, String> {
         "new_tab" | "create_tab" => Ok(BindingAction::CreateTab),
         "close_tab" => Ok(BindingAction::CloseTab),
         "carry" => Ok(BindingAction::Carry),
+        "broadcast_menu" => Ok(BindingAction::BroadcastMenu),
         "broadcast_visible" => Ok(BindingAction::BroadcastVisible),
         "broadcast_manual" => Ok(BindingAction::BroadcastManual),
         "broadcast_target" | "toggle_manual_target" => Ok(BindingAction::ToggleManualTarget),
         "broadcast_reset" | "reset_broadcast" => Ok(BindingAction::ResetBroadcast),
-        "copy" | "copy_selection" => Ok(BindingAction::CopySelection),
+        "selection_mode" | "copy" | "copy_selection" => Ok(BindingAction::SelectionMode),
         "quit" | "request_quit" => Ok(BindingAction::Quit),
         _ => Err("unknown command name".into()),
     }
@@ -588,6 +662,8 @@ fn action_name(action: BindingAction) -> String {
         BindingAction::SwapMember(direction) => format!("swap_{direction:?}").to_ascii_lowercase(),
         BindingAction::CarryMemberToTab(number) => format!("carry_{number}"),
         BindingAction::Swap(direction) => format!("swap_stack_{direction:?}").to_ascii_lowercase(),
+        BindingAction::ResizeMode => "resize_mode".into(),
+        BindingAction::BroadcastMenu => "broadcast_menu".into(),
         BindingAction::Resize(direction) => format!("resize_{direction:?}").to_ascii_lowercase(),
         BindingAction::SplitVertical => "split_vertical".into(),
         BindingAction::SplitHorizontal => "split_horizontal".into(),
@@ -608,7 +684,7 @@ fn action_name(action: BindingAction) -> String {
         BindingAction::BroadcastManual => "broadcast_manual".into(),
         BindingAction::ToggleManualTarget => "broadcast_target".into(),
         BindingAction::ResetBroadcast => "broadcast_reset".into(),
-        BindingAction::CopySelection => "copy_selection".into(),
+        BindingAction::SelectionMode => "selection_mode".into(),
         BindingAction::Quit => "quit".into(),
     }
 }
@@ -616,6 +692,47 @@ fn action_name(action: BindingAction) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn modal_bindings_have_separate_scopes_and_help_uses_custom_keys() {
+        let config = RuntimeConfig::from_toml_str(
+            "[bindings]\nresize_mode = \"z\"\nbroadcast_menu = \"c\"\nbroadcast_reset = \"z\"",
+        )
+        .unwrap();
+        assert_eq!(
+            config.bindings.binding(b'z'),
+            Some(BindingAction::ResizeMode)
+        );
+        assert_eq!(
+            config.bindings.broadcast_bindings().get(&b'z'),
+            Some(&BindingAction::ResetBroadcast)
+        );
+        assert!(
+            config
+                .effective_help()
+                .contains("leader c z: broadcast_reset")
+        );
+        assert!(
+            config
+                .popup_help()
+                .iter()
+                .any(|(line, _)| line == "<leader> c ~ Broadcast Menu")
+        );
+        assert!(
+            config
+                .broadcast_help()
+                .iter()
+                .any(|(line, _)| line == "z ~ Reset Broadcast")
+        );
+        assert!(
+            !config
+                .popup_help()
+                .iter()
+                .any(|(line, _)| line.contains("Reset Broadcast"))
+        );
+        assert!(RuntimeConfig::from_toml_str("[bindings]\nbroadcast_reset = \"b\"").is_err());
+        assert!(RuntimeConfig::from_toml_str("[bindings]\nbroadcast_reset = \"Esc\"").is_err());
+    }
 
     #[test]
     fn popup_groups_commands_and_preserves_custom_numbered_keys() {

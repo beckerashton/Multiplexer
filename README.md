@@ -37,10 +37,8 @@ swap_left = "Ctrl-Alt-h"
 swap_down = "Ctrl-Alt-j"
 swap_up = "Ctrl-Alt-k"
 swap_right = "Ctrl-Alt-l"
-resize_left = "Ctrl-h"
-resize_down = "Ctrl-j"
-resize_up = "Ctrl-k"
-resize_right = "Ctrl-l"
+resize_mode = "r"
+broadcast_menu = "b"
 split_vertical = "|"
 split_horizontal = "-"
 stack_add = "a"
@@ -65,7 +63,7 @@ broadcast_visible = "b"
 broadcast_manual = "B"
 broadcast_target = "m"
 broadcast_reset = "r"
-copy_selection = "y"
+selection_mode = "y"
 quit = "q"
 ```
 
@@ -73,7 +71,7 @@ Bindings may use `Alt-h`, `Ctrl-Alt-h`, or `Ctrl-Alt-1` for direct shortcuts.
 Prefix a direct member move/carry binding with the leader to operate on its
 whole stack. Explicit `swap_stack_left` (and other directions) and
 `carry_stack_1` … `carry_stack_9` actions can also be rebound independently.
-Keys without Alt are interpreted after the leader: one ASCII character,
+Broadcast action keys are interpreted inside the broadcast submenu and can share keys with the main menu. Other keys without Alt are interpreted after the leader: one ASCII character,
 `Ctrl-` plus one letter, a named key such as
 `Esc`, `Tab`, `Enter`, or `Backspace`, or a byte such as `0x02`. Binding names
 are validated, duplicate keys are rejected, and a binding cannot make the
@@ -87,7 +85,7 @@ The current focused PTY checks include a raw standalone Escape and exact shell
 input (`runtime_smoke`), real `/usr/bin/nvim` editing with `hjkl`, Escape,
 `:wq`, and shell recovery (`neovim_smoke`), plus visible-stack broadcast,
 cross-tab exclusion, and PID-preserving stack carry (`live_sessions`). Run
-Shift-SGR copy through a fake `wl-copy`, ordinary SGR mouse forwarding, and
+Vim-style selection and clipboard retry through fake helpers, ordinary SGR mouse forwarding, and
 confirmed-quit termios restoration are covered by `clipboard_smoke` and
 `terminal_restore`. Run them with the same project-local toolchain as the
 workspace tests:
@@ -144,6 +142,8 @@ wide and combining characters, stale-cell erasure, and cursor-only updates.
 - **Ctrl-b then Ctrl-Alt-h/j/k/l or 1…9:** swap or carry the whole stack,
   preserving its displayed member. A customized leader replaces Ctrl-b.
 - **Alt-1…9:** select the numbered tab; a missing tab starts one shell.
+- **Ctrl-b then r:** enter resize mode. `hjkl` pushes the focused pane or stack’s left/bottom/top/right edge outward by one cell; `HJKL` uses five-cell steps. Alt-hjkl changes focus while staying in resize mode. Escape exits. Terminal edges and neighboring minimum sizes limit expansion.
+- **Ctrl-b then b:** open the broadcast submenu. `b` toggles visible-pane broadcast, `B` toggles manual broadcast, `m` toggles the focused pane’s manual target, and `r` resets broadcast. A command closes the submenu; Escape cancels. Unbound keys leave it open.
 - **Ctrl-b:** show the effective keybinding popup. Press a leader binding to
   act, or Escape to dismiss. Related commands are grouped in two columns using
   the compact style in [popup_example.md](popup_example.md). Keep similar
@@ -151,10 +151,10 @@ wide and combining characters, stale-cell erasure, and cursor-only updates.
   mode stays open without a timeout. Unbound keys leave it open; press the leader
   twice to send a literal leader byte.
 
-The UI uses Dracula colors: a dark background, purple focus accents, muted
+The UI uses Dracula colors: purple focus accents, muted
 blue-gray inactive borders, and pink broadcast/red confirmation indicators.
-Terminal default text and background follow the theme; explicit application
-ANSI and RGB colors are preserved.
+Terminal default text follows the theme, while the background uses the host
+terminal's default. Explicit application ANSI and RGB colors are preserved.
 
 Each pane has a rounded border. The top row shows stable tab numbers followed
 by one square per pane in layout order, for example `1 ▫▫▫▫ │ 2 ▪▫`.
@@ -185,3 +185,39 @@ it does not expire leader mode. The Alt/Escape sequence timeout remains active.
 
 Arrow keys follow each recipient application’s cursor-key mode, including when
 broadcasting. Lock-state flags are removed from extended cursor reports.
+
+## Pane scrollback
+
+Scroll the mouse wheel over a shell pane to browse its last 10,000 lines,
+three lines per wheel event. Scroll down to return to live output; typing or
+pasting also returns the receiving pane to live output. The cursor is hidden
+while viewing history. Leader `y` enters keyboard selection mode to copy history.
+
+Applications that enable mouse reporting retain their own wheel scrolling.
+Shift-wheel overrides this on the normal terminal screen. Alternate-screen
+applications (such as Neovim) continue to manage their own scrolling.
+
+Command families should use submenus as bindings expand. Keep the main popup, submenu help, and configuration documentation aligned.
+
+## Keyboard selection
+
+Leader `y` opens a frozen snapshot of the focused pane and its retained
+scrollback, starting at the application cursor. The live process keeps running.
+
+- `hjkl`: left/down/up/right; `w/b/e`: next word, previous word, word end.
+- `0/^/$`: line start, first nonblank, line end; `gg/G`: buffer start/end.
+- Numeric prefixes repeat motions (for example, `10k`); `3gg` or `3G` goes to row 3.
+- Ctrl-u/d: half-page up/down; Ctrl-b/f: page up/down.
+- `v`: character selection; `V`: whole-line selection. Repeat to clear the
+  selection, or switch between them while retaining the anchor.
+- `y`: copy the selection to the system clipboard and exit. With no selection,
+  copy the current line. Escape cancels and restores live output.
+
+The status bar shows the mode and buffer position. Other keys, mouse reports,
+and pasted text are consumed while selecting; they never reach the application
+or broadcast targets. A terminal resize cancels selection.
+
+Copy tries `wl-copy` on Wayland, then `xclip` and `xsel` as fallbacks; X11
+uses `xclip` then `xsel`. On failure the selection stays open, the status bar
+shows the error, and `y` retries. The old `copy_selection` configuration name
+is accepted as an alias for `selection_mode`.

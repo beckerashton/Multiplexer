@@ -1,9 +1,9 @@
 use mux_core::SessionId;
 
-/// A persistent, screen-local cell selection for one terminal session.
+/// A screen-local cell selection for one terminal session.
 /// Coordinates are zero-based `(column, row)` and both endpoints are
-/// inclusive. The renderer translates host-terminal mouse cells to this
-/// representation before constructing a selection.
+/// inclusive. Keyboard selection clips its absolute buffer range to this
+/// representation for rendering and text extraction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Selection {
     pub session: SessionId,
@@ -31,7 +31,7 @@ pub fn selected_text(screen: &vt100::Screen, selection: &Selection) -> String {
             (end.0, end.1, start.0, start.1)
         };
 
-    // A mouse point can land on either half of a double-width glyph. Include
+    // A selection endpoint can land on either half of a double-width glyph. Include
     // the glyph once, rather than returning an empty continuation cell or a
     // partial terminal character.
     if screen

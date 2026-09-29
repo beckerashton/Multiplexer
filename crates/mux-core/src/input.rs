@@ -38,6 +38,8 @@ pub struct InputRouter {
     leader_pending: bool,
     alt_pending: bool,
     carry_pending: bool,
+    resize_mode: bool,
+    broadcast_pending: bool,
     csi: Vec<u8>,
     pending_bytes: VecDeque<u8>,
 }
@@ -45,6 +47,18 @@ pub struct InputRouter {
 impl InputRouter {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn resize_mode(&self) -> bool {
+        self.resize_mode
+    }
+
+    pub fn broadcast_pending(&self) -> bool {
+        self.broadcast_pending
+    }
+
+    pub fn modal(&self) -> bool {
+        self.resize_mode || self.broadcast_pending
     }
 
     pub fn leader_pending(&self) -> bool {
@@ -126,14 +140,14 @@ impl InputRouter {
                     return self
                         .modified_key(key, modifiers, context, config)
                         .unwrap_or_else(|| {
-                            if self.leader_pending {
+                            if self.leader_pending || self.modal() {
                                 vec![InputRoute::Consume]
                             } else {
                                 vec![InputRoute::Forward(bytes)]
                             }
                         });
                 }
-                return if self.leader_pending {
+                return if self.leader_pending || self.modal() {
                     vec![InputRoute::Consume]
                 } else {
                     vec![InputRoute::Forward(bytes)]
@@ -172,11 +186,19 @@ impl InputRouter {
             if let Some(routes) = self.modified_key(key, modifiers, context, config) {
                 return routes;
             }
-            return if self.leader_pending {
+            return if self.leader_pending || self.modal() {
                 vec![InputRoute::Consume]
             } else {
                 vec![InputRoute::Forward(vec![0x1b, byte])]
             };
+        }
+
+        if self.modal() {
+            if byte == 0x1b {
+                self.alt_pending = true;
+                return Vec::new();
+            }
+            return self.modal_key(byte, context, config);
         }
 
         if self.leader_pending {
@@ -224,6 +246,29 @@ impl InputRouter {
         context: &RouterContext,
         config: &BindingConfig,
     ) -> Option<Vec<InputRoute>> {
+        if self.modal() {
+            if modifiers == 1 && key == 0x1b {
+                self.resize_mode = false;
+                self.broadcast_pending = false;
+                return Some(vec![InputRoute::Consume]);
+            }
+            if modifiers == 1 || modifiers == 2 {
+                let key = if modifiers == 2 {
+                    key.to_ascii_uppercase()
+                } else {
+                    key
+                };
+                return Some(self.modal_key(key, context, config));
+            }
+            if self.resize_mode && modifiers == 3 {
+                if let Some(action @ BindingAction::Focus(_)) =
+                    config.modified_binding(modifiers, key)
+                {
+                    return Some(self.action_for(action, context));
+                }
+            }
+            return Some(vec![InputRoute::Consume]);
+        }
         if let Some(action) = config.modified_binding(modifiers, key) {
             let action = if self.leader_pending {
                 match action {
@@ -252,8 +297,43 @@ impl InputRouter {
         None
     }
 
+    fn modal_key(
+        &mut self,
+        key: u8,
+        context: &RouterContext,
+        config: &BindingConfig,
+    ) -> Vec<InputRoute> {
+        if self.resize_mode {
+            let direction = match key.to_ascii_lowercase() {
+                b'h' => Some(crate::Direction::Left),
+                b'j' => Some(crate::Direction::Down),
+                b'k' => Some(crate::Direction::Up),
+                b'l' => Some(crate::Direction::Right),
+                _ => None,
+            };
+            if let Some(direction) = direction {
+                return vec![InputRoute::Command(WorkspaceCommand::Resize {
+                    direction,
+                    cells: if key.is_ascii_uppercase() { 5 } else { 1 },
+                })];
+            }
+        } else if let Some(action) = config.broadcast_bindings().get(&key) {
+            self.broadcast_pending = false;
+            return self.action_for(*action, context);
+        }
+        vec![InputRoute::Consume]
+    }
+
     fn action_for(&mut self, action: BindingAction, context: &RouterContext) -> Vec<InputRoute> {
         let command = match action {
+            BindingAction::ResizeMode => {
+                self.resize_mode = true;
+                return vec![InputRoute::Consume];
+            }
+            BindingAction::BroadcastMenu => {
+                self.broadcast_pending = true;
+                return vec![InputRoute::Consume];
+            }
             BindingAction::Focus(direction) => WorkspaceCommand::Focus(direction),
             BindingAction::SwapMember(direction) => WorkspaceCommand::SwapMember(direction),
             BindingAction::CarryMemberToTab(number) => {
@@ -317,13 +397,18 @@ impl InputRouter {
                 WorkspaceCommand::ToggleManualBroadcastTarget(context.focused_slot)
             }
             BindingAction::ResetBroadcast => WorkspaceCommand::ResetBroadcast,
-            BindingAction::CopySelection => WorkspaceCommand::CopySelection,
+            BindingAction::SelectionMode => WorkspaceCommand::SelectionMode,
             BindingAction::Quit => WorkspaceCommand::RequestQuit,
         };
         vec![InputRoute::Command(command)]
     }
 
     fn route_paste(&mut self, bytes: Vec<u8>) -> Vec<InputRoute> {
+        if self.modal() {
+            self.alt_pending = false;
+            self.csi.clear();
+            return vec![InputRoute::Consume];
+        }
         self.carry_pending = false;
         let mut routes = Vec::new();
         if !self.csi.is_empty() {
@@ -353,7 +438,7 @@ impl InputRouter {
                     return routes;
                 }
             }
-            return if self.leader_pending {
+            return if self.leader_pending || self.modal() {
                 vec![InputRoute::Consume]
             } else {
                 vec![InputRoute::Forward(bytes)]
@@ -361,8 +446,10 @@ impl InputRouter {
         }
         if self.alt_pending {
             self.alt_pending = false;
-            if self.leader_pending {
+            if self.leader_pending || self.modal() {
                 self.leader_pending = false;
+                self.resize_mode = false;
+                self.broadcast_pending = false;
                 return vec![InputRoute::Consume];
             }
             return vec![InputRoute::Forward(vec![0x1b])];

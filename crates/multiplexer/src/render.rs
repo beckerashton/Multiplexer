@@ -16,13 +16,13 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Clear, Paragraph, Widget},
 };
 
-use crate::{backend::TerminalBackend, selection::Selection};
+use crate::{backend::TerminalBackend, selection::Selection, selection_mode::SelectionMode};
 
 // Dracula's standard palette: https://spec.draculatheme.com/#sec-Standard
 mod theme {
     use ratatui::style::Color;
 
-    pub const BACKGROUND: Color = Color::Rgb(0x28, 0x2a, 0x36);
+    pub const BACKGROUND: Color = Color::Reset;
     pub const FOREGROUND: Color = Color::Rgb(0xf8, 0xf8, 0xf2);
     pub const SELECTION: Color = Color::Rgb(0x44, 0x47, 0x5a);
     pub const MUTED: Color = Color::Rgb(0x62, 0x72, 0xa4);
@@ -161,7 +161,7 @@ impl<W: Write> Renderer<W> {
         config: &BindingConfig,
         status: &str,
         quit_pending: bool,
-        selection: Option<&Selection>,
+        selection_mode: Option<&SelectionMode>,
     ) -> io::Result<()> {
         let (cols, rows) = crossterm::terminal::size()?;
         let scene = compose(
@@ -172,7 +172,7 @@ impl<W: Write> Renderer<W> {
             config,
             status,
             quit_pending,
-            selection,
+            selection_mode,
         );
         self.present(scene)
     }
@@ -187,7 +187,7 @@ fn compose(
     config: &BindingConfig,
     status: &str,
     quit_pending: bool,
-    selection: Option<&Selection>,
+    selection_mode: Option<&SelectionMode>,
 ) -> Scene {
     let mut buffer = Buffer::empty(area);
     buffer.set_style(
@@ -254,15 +254,25 @@ fn compose(
                 Rect::new(frame.x, frame.y, frame.cols, frame.rows),
                 &mut buffer,
             );
-        if let Some(screen) = backend.screen(id) {
+        let mode = selection_mode.filter(|mode| mode.session == id);
+        let mode_selection = mode.and_then(SelectionMode::visible_selection);
+        if let Some(screen) = mode
+            .map(SelectionMode::screen)
+            .or_else(|| backend.screen(id))
+        {
             paint_screen(
                 &mut buffer,
                 screen,
                 Rect::new(inner.x, inner.y, width, height),
-                selection.filter(|selection| selection.session == id),
+                mode_selection.as_ref(),
             );
-            if focused && !screen.hide_cursor() {
-                let (row, col) = screen.cursor_position();
+            if focused && (mode.is_some() || (!screen.hide_cursor() && screen.scrollback() == 0)) {
+                let (row, col) = mode
+                    .map(|mode| {
+                        let (col, row) = mode.cursor();
+                        (row, col)
+                    })
+                    .unwrap_or_else(|| screen.cursor_position());
                 if row < height && col < width {
                     cursor = Some((inner.x.saturating_add(col), inner.y.saturating_add(row)));
                 }
@@ -280,6 +290,12 @@ fn compose(
         confirmation_text(&view, true)
     } else if view.pending_confirmation.is_some() {
         confirmation_text(&view, false)
+    } else if let Some(mode) = selection_mode {
+        mode.hint()
+    } else if router.resize_mode() {
+        "RESIZE: hjkl / HJKL · Alt-hjkl focus · Esc exits".into()
+    } else if router.broadcast_pending() {
+        "BROADCAST MENU".into()
     } else if router.leader_pending() {
         "LEADER".into()
     } else if router.carry_pending() {
@@ -292,7 +308,11 @@ fn compose(
             0,
             rows - 1,
             clip(
-                &format!("tab {}  {}  {}  {}", tab.number, scope, prompt, status),
+                &if selection_mode.is_some() && !status.is_empty() {
+                    format!("{} · {}", status, prompt)
+                } else {
+                    format!("tab {}  {}  {}  {}", tab.number, scope, prompt, status)
+                },
                 cols,
             ),
             cols as usize,
@@ -300,7 +320,7 @@ fn compose(
                 theme::RED
             } else if view.broadcast_scope != BroadcastScope::Focused {
                 theme::PINK
-            } else if router.leader_pending() || router.carry_pending() {
+            } else if router.leader_pending() || router.carry_pending() || router.modal() {
                 theme::CYAN
             } else {
                 theme::FOREGROUND
@@ -348,8 +368,30 @@ fn compose(
             .style(Style::default().fg(theme::MUTED))
             .render(Rect::new(0, bounds.y, cols, bounds.rows), &mut buffer);
     }
-    if router.leader_pending() && !quit_pending && view.pending_confirmation.is_none() {
-        leader_popup(&mut buffer, config);
+    if (router.leader_pending() || router.modal())
+        && !quit_pending
+        && view.pending_confirmation.is_none()
+    {
+        let runtime = crate::runtime_config::RuntimeConfig {
+            bindings: config.clone(),
+        };
+        if router.resize_mode() {
+            bindings_popup(
+                &mut buffer,
+                &runtime.resize_help(),
+                " Resize mode ",
+                "hjkl / HJKL resize · Esc exits",
+            );
+        } else if router.broadcast_pending() {
+            bindings_popup(
+                &mut buffer,
+                &runtime.broadcast_help(),
+                " Broadcast ",
+                "Press a command · Esc cancels",
+            );
+        } else {
+            leader_popup(&mut buffer, config);
+        }
         cursor = None;
     }
     Scene { buffer, cursor }
@@ -459,14 +501,26 @@ fn popup_columns(help: &[(String, bool)], width: usize) -> [Vec<(String, bool)>;
 }
 
 fn leader_popup(buffer: &mut Buffer, config: &BindingConfig) {
-    let area = buffer.area;
-    if area.width < 4 || area.height < 4 {
-        return;
-    }
     let help = crate::runtime_config::RuntimeConfig {
         bindings: config.clone(),
     }
     .popup_help();
+    bindings_popup(
+        buffer,
+        &help,
+        &format!(
+            " Key bindings · {} ",
+            crate::runtime_config::format_key(config.leader())
+        ),
+        "Press a binding · Esc dismisses",
+    );
+}
+
+fn bindings_popup(buffer: &mut Buffer, help: &[(String, bool)], title: &str, hint: &str) {
+    let area = buffer.area;
+    if area.width < 4 || area.height < 4 {
+        return;
+    }
     let desired_width = help
         .iter()
         .map(|(line, _)| line.chars().count())
@@ -495,10 +549,7 @@ fn leader_popup(buffer: &mut Buffer, config: &BindingConfig) {
     Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .title(format!(
-            " Key bindings · {} ",
-            crate::runtime_config::format_key(config.leader())
-        ))
+        .title(title)
         .style(Style::default().fg(theme::FOREGROUND).bg(theme::BACKGROUND))
         .border_style(Style::default().fg(theme::PURPLE))
         .render(popup, buffer);
@@ -523,7 +574,7 @@ fn leader_popup(buffer: &mut Buffer, config: &BindingConfig) {
     let hint = if content_rows > available_rows {
         "More bindings: multiplexer --help · Esc dismisses"
     } else {
-        "Press a binding · Esc dismisses"
+        hint
     };
     buffer.set_stringn(
         popup.x + 1,

@@ -217,3 +217,63 @@ fn legacy_pane_jumps_and_horizontal_edges_cross_populated_tabs() {
     app.send(b"\x1b]");
     app.top(" 1 ▫▪  │  3 ▫");
 }
+
+#[test]
+fn resize_mode_and_broadcast_submenu_render_and_route_live_input() {
+    let mut app = Harness::new();
+    app.wait("initial shell", |s| s.contents().contains("todo-shell>"));
+    app.send(b"\x02|");
+    app.top(" 1 ▫▪");
+    app.wait("split boundary", |s| {
+        s.cell(65, 120).unwrap().contents() == "╰"
+    });
+    app.send(b"\x02r");
+    app.wait("resize popup", |s| {
+        s.contents().contains("Resize mode")
+            && s.contents().contains("(5 cells)")
+            && s.hide_cursor()
+    });
+    app.send(b"h");
+    app.wait("one cell left", |s| {
+        s.cell(65, 119).unwrap().contents() == "╰"
+    });
+    // Extended Shift-h must match a legacy uppercase H.
+    app.send(b"\x1b[104;2u");
+    app.wait("five cells left", |s| {
+        s.cell(65, 114).unwrap().contents() == "╰"
+    });
+    app.send(b"\x1bh");
+    app.top(" 1 ▪▫");
+    app.send(b"l");
+    app.wait("resize newly focused pane", |s| {
+        s.cell(65, 115).unwrap().contents() == "╰" && s.contents().contains("Resize mode")
+    });
+    app.send(b"\x1b");
+    app.wait("Escape ends resize mode", |s| {
+        !s.contents().contains("Resize mode") && !s.hide_cursor()
+    });
+    app.send(b"printf 'MODE-EXIT-OK\\n'\r");
+    app.wait("input resumes", |s| s.contents().contains("MODE-EXIT-OK"));
+
+    app.send(b"\x02b");
+    app.wait("broadcast menu", |s| {
+        s.contents().contains("Toggle Visible Broadcast")
+            && s.contents().contains("Reset Broadcast")
+            && !s.contents().contains("BROADCAST ALL")
+    });
+    app.send(b"!");
+    app.send(b"\x1b");
+    app.wait("broadcast cancellation", |s| {
+        !s.contents().contains("Toggle Visible Broadcast")
+            && !s.contents().contains("BROADCAST ALL")
+            && !s.hide_cursor()
+    });
+    app.send(b"\x02bb");
+    app.wait("visible broadcast enabled", |s| {
+        s.contents().contains("BROADCAST ALL") && !s.contents().contains("Toggle Visible Broadcast")
+    });
+    app.send(b"\x02br");
+    app.wait("broadcast reset", |s| {
+        !s.contents().contains("BROADCAST ALL") && !s.contents().contains("Reset Broadcast")
+    });
+}

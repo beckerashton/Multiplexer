@@ -12,6 +12,8 @@ pub enum BindingAction {
     SwapMember(Direction),
     CarryMemberToTab(usize),
     Resize(Direction),
+    ResizeMode,
+    BroadcastMenu,
     SplitVertical,
     SplitHorizontal,
     AddToStack,
@@ -29,8 +31,20 @@ pub enum BindingAction {
     BroadcastManual,
     ToggleManualTarget,
     ResetBroadcast,
-    CopySelection,
+    SelectionMode,
     Quit,
+}
+
+impl BindingAction {
+    pub fn is_broadcast(self) -> bool {
+        matches!(
+            self,
+            Self::BroadcastVisible
+                | Self::BroadcastManual
+                | Self::ToggleManualTarget
+                | Self::ResetBroadcast
+        )
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -89,6 +103,7 @@ pub struct BindingConfig {
     alt_tab_keys: [u8; 9],
     bindings: BTreeMap<u8, BindingAction>,
     modified: BTreeMap<(u8, u8), BindingAction>,
+    broadcast: BTreeMap<u8, BindingAction>,
 }
 
 impl Default for BindingConfig {
@@ -101,13 +116,12 @@ impl Default for BindingConfig {
             alt_tab_keys: *b"123456789",
             bindings: BTreeMap::new(),
             modified: BTreeMap::new(),
+            broadcast: BTreeMap::new(),
         };
 
         let defaults = [
-            (0x08, BindingAction::Resize(Direction::Left)),
-            (0x0a, BindingAction::Resize(Direction::Down)),
-            (0x0b, BindingAction::Resize(Direction::Up)),
-            (0x0c, BindingAction::Resize(Direction::Right)),
+            (b'r', BindingAction::ResizeMode),
+            (b'b', BindingAction::BroadcastMenu),
             (b'|', BindingAction::SplitVertical),
             (b'-', BindingAction::SplitHorizontal),
             (b'a', BindingAction::AddToStack),
@@ -129,11 +143,15 @@ impl Default for BindingConfig {
             (b'B', BindingAction::BroadcastManual),
             (b'm', BindingAction::ToggleManualTarget),
             (b'r', BindingAction::ResetBroadcast),
-            (b'y', BindingAction::CopySelection),
+            (b'y', BindingAction::SelectionMode),
             (b'q', BindingAction::Quit),
         ];
         for (key, action) in defaults {
-            config.bindings.insert(key, action);
+            if action.is_broadcast() {
+                config.broadcast.insert(key, action);
+            } else {
+                config.bindings.insert(key, action);
+            }
         }
         for (key, direction) in [
             (b'h', Direction::Left),
@@ -269,33 +287,48 @@ impl BindingConfig {
         &self.bindings
     }
 
+    pub fn broadcast_bindings(&self) -> &BTreeMap<u8, BindingAction> {
+        &self.broadcast
+    }
+
+    fn action_bindings_mut(&mut self, action: BindingAction) -> &mut BTreeMap<u8, BindingAction> {
+        if action.is_broadcast() {
+            &mut self.broadcast
+        } else {
+            &mut self.bindings
+        }
+    }
+
     pub fn bind(&mut self, key: u8, action: BindingAction) -> Result<(), BindingError> {
         self.validate_binding(key, action)?;
-        if let Some(existing) = self.bindings.get(&key).copied() {
+        let bindings = self.action_bindings_mut(action);
+        if let Some(existing) = bindings.get(&key).copied() {
             return Err(BindingError::DuplicateKey { key, existing });
         }
-        self.bindings.insert(key, action);
+        bindings.insert(key, action);
         Ok(())
     }
 
     pub fn replace_binding(&mut self, key: u8, action: BindingAction) {
-        self.bindings.insert(key, action);
+        self.action_bindings_mut(action).insert(key, action);
     }
 
     /// Rebind an existing action, removing its previous key first.
     pub fn rebind(&mut self, key: u8, action: BindingAction) -> Result<(), BindingError> {
         self.validate_binding(key, action)?;
-        if let Some(existing) = self.bindings.get(&key).copied() {
+        let bindings = self.action_bindings_mut(action);
+        if let Some(existing) = bindings.get(&key).copied() {
             if existing != action {
                 return Err(BindingError::DuplicateKey { key, existing });
             }
         }
-        self.bindings.retain(|_, existing| *existing != action);
-        self.bindings.insert(key, action);
+        bindings.retain(|_, existing| *existing != action);
+        bindings.insert(key, action);
         Ok(())
     }
 
     pub fn remove_action(&mut self, action: BindingAction) {
+        self.broadcast.retain(|_, existing| *existing != action);
         self.bindings.retain(|_, existing| *existing != action);
         self.modified.retain(|_, existing| *existing != action);
     }
@@ -322,7 +355,7 @@ impl BindingConfig {
     }
 
     fn validate_binding(&self, key: u8, action: BindingAction) -> Result<(), BindingError> {
-        if key == self.leader {
+        if key == self.leader && !action.is_broadcast() {
             return Err(BindingError::BindingConflictsWithLeader);
         }
         if matches!(action, BindingAction::SelectStackMember(0)) {

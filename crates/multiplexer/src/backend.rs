@@ -213,6 +213,16 @@ impl TerminalBackend {
             .map(|terminal| terminal.parser.screen())
     }
 
+    pub fn set_scrollback(&mut self, id: SessionId, rows: usize) -> bool {
+        let Some(terminal) = self.terminals.get_mut(&id) else {
+            return false;
+        };
+        let screen = terminal.parser.screen_mut();
+        let previous = screen.scrollback();
+        screen.set_scrollback(rows);
+        previous != screen.scrollback()
+    }
+
     /// Applies all queued output to each independent parser. Call this even
     /// when a session is hidden so a noisy background program cannot block.
     pub fn drain_events(&mut self, maximum: usize) -> Vec<TerminalEvent> {

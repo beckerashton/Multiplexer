@@ -315,7 +315,7 @@ impl Workspace {
             }
             // Clipboard selection is terminal/UI state. The command is a
             // deliberate no-op in the pure workspace model.
-            WorkspaceCommand::CopySelection => Ok(Transition::unchanged()),
+            WorkspaceCommand::SelectionMode => Ok(Transition::unchanged()),
             // Exit confirmation belongs to the terminal host because only it
             // owns raw mode, alternate screen restoration, and PTY teardown.
             WorkspaceCommand::RequestQuit => Ok(Transition::unchanged()),
@@ -509,9 +509,24 @@ impl Workspace {
         let bounds = self.bounds;
         let minimum = self.minimum_pane_size;
         let focused = self.active_tab_ref().focused_slot;
-        self.active_tab_mut()
-            .layout
-            .resize(focused, direction, cells, bounds, minimum)?;
+        // Large mode steps should use the remaining space at a minimum-size
+        // boundary instead of rejecting a step that can still partially move.
+        let mut step = cells;
+        loop {
+            match self
+                .active_tab_mut()
+                .layout
+                .resize(focused, direction, step, bounds, minimum)
+            {
+                Err(LayoutError::MinimumSize) if step.unsigned_abs() > 1 => {
+                    step -= step.signum();
+                }
+                result => {
+                    result?;
+                    break;
+                }
+            }
+        }
         Ok(if cells == 0 {
             Transition::unchanged()
         } else {
