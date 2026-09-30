@@ -1,6 +1,7 @@
 mod backend;
 mod clipboard;
 mod keyboard;
+mod layout_persistence;
 mod mouse;
 mod pane_geometry;
 mod raw_input;
@@ -21,6 +22,7 @@ use std::{
 use backend::{TerminalBackend, TerminalEvent};
 use clipboard::{ClipboardEnvironment, copy_with_helper};
 use crossterm::terminal;
+use layout_persistence::LayoutStore;
 use mouse::{Frame as MouseFrame, SgrDecoder};
 use mux_core::{
     BindingConfig, InputEvent, InputRoute, LifecycleEffect, PendingConfirmation, RouterContext,
@@ -38,12 +40,13 @@ const CONFIRM_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config_path = None;
+    let mut fresh_layout = false;
     let mut args = std::env::args().skip(1);
     while let Some(argument) = args.next() {
         match argument.as_str() {
             "--help" | "-h" => {
                 println!(
-                    "multiplexer [--config PATH]\n\n{}",
+                    "multiplexer [--config PATH] [--fresh]\n\n{}",
                     RuntimeConfig::default().effective_help()
                 );
                 return Ok(());
@@ -53,24 +56,64 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     args.next().ok_or("--config requires a path")?,
                 ))
             }
+            "--fresh" => fresh_layout = true,
             _ => return Err(format!("unknown option: {argument}").into()),
         }
     }
     let config = RuntimeConfig::load(config_path.as_deref())?;
     let guard = TerminalGuard::enter()?;
-    run(guard, config.bindings)
+    run(guard, config.bindings, fresh_layout)
 }
 
-fn run(_guard: TerminalGuard, config: BindingConfig) -> Result<(), Box<dyn std::error::Error>> {
+fn run(
+    _guard: TerminalGuard,
+    config: BindingConfig,
+    fresh_layout: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let default_session = SessionSpec {
         program: PathBuf::from(std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())),
         args: Vec::new(),
         cwd: std::env::current_dir().ok(),
     };
-    let (mut workspace, initial) = Workspace::new(default_session.clone());
+    let mut startup_status = String::new();
+    let state_path = layout_persistence::default_path();
+    if let Err(error) = &state_path {
+        startup_status = format!("layout persistence unavailable: {error}");
+    }
+    let saved_layout = if fresh_layout {
+        None
+    } else {
+        match &state_path {
+            Ok(path) => match layout_persistence::load(path) {
+                Ok(saved) => saved,
+                Err(error) => {
+                    startup_status =
+                        format!("could not load saved layout: {error}; starting fresh");
+                    None
+                }
+            },
+            Err(_) => None,
+        }
+    };
+    let (mut workspace, initial) = match saved_layout {
+        Some(saved) => match Workspace::restore_layout(saved, default_session.clone()) {
+            Ok(restored) => restored,
+            Err(error) => {
+                append_status(
+                    &mut startup_status,
+                    format!("saved layout ignored: {error}"),
+                );
+                Workspace::new(default_session.clone())
+            }
+        },
+        None => Workspace::new(default_session.clone()),
+    };
+    let mut layout_store = state_path
+        .ok()
+        .map(|path| LayoutStore::new(path, workspace.layout_snapshot()));
     sync_bounds(&mut workspace)?;
     let mut backend = TerminalBackend::new(10_000);
-    let mut status = String::new();
+    let mut status = startup_status;
     apply_effects(
         &mut backend,
         initial.effects,
@@ -78,6 +121,11 @@ fn run(_guard: TerminalGuard, config: BindingConfig) -> Result<(), Box<dyn std::
         &mut workspace,
         &mut status,
     );
+    if let Some(store) = &mut layout_store {
+        if let Err(error) = store.save_initial(&workspace.layout_snapshot()) {
+            append_status(&mut status, format!("could not save layout: {error}"));
+        }
+    }
     let mut router = mux_core::InputRouter::new();
     let mut raw = RawInput::default();
     let mut mouse = SgrDecoder::default();
@@ -130,6 +178,7 @@ fn run(_guard: TerminalGuard, config: BindingConfig) -> Result<(), Box<dyn std::
                     dirty = true;
                     let _ = workspace.session_state_changed(session, SessionState::Exited);
                     status = format!("session {} exited ({code})", session.0);
+                    save_changed_layout(&mut layout_store, &workspace, &mut status);
                 }
                 TerminalEvent::ReadError { session, message } => {
                     dirty = true;
@@ -177,6 +226,7 @@ fn run(_guard: TerminalGuard, config: BindingConfig) -> Result<(), Box<dyn std::
             selection_mode: &mut selection_mode,
             config: &config,
             default_session: &default_session,
+            layout_store: &mut layout_store,
             status: &mut status,
             pending_deadline: &mut pending_deadline,
             quit_deadline: &mut quit_deadline,
@@ -302,6 +352,7 @@ struct EventHandler<'a> {
     selection_mode: &'a mut Option<SelectionMode>,
     config: &'a BindingConfig,
     default_session: &'a SessionSpec,
+    layout_store: &'a mut Option<LayoutStore>,
     status: &'a mut String,
     pending_deadline: &'a mut Option<Instant>,
     quit_deadline: &'a mut Option<Instant>,
@@ -333,6 +384,7 @@ impl EventHandler<'_> {
         let selection_mode = &mut *self.selection_mode;
         let config = self.config;
         let default_session = self.default_session;
+        let layout_store = &mut *self.layout_store;
         let status = &mut *self.status;
         let pending_deadline = &mut *self.pending_deadline;
         let quit_deadline = &mut *self.quit_deadline;
@@ -395,7 +447,7 @@ impl EventHandler<'_> {
                                     WorkspaceCommand::ConfirmKillFocusedStack
                                 }
                             };
-                            apply_command(command, workspace, backend, status);
+                            apply_command(command, workspace, backend, status, layout_store);
                             *pending_deadline = None;
                         }
                         _ => *status = "confirm with y, cancel with n or Esc".into(),
@@ -456,7 +508,7 @@ impl EventHandler<'_> {
                     }
                 }
                 InputRoute::Command(command) => {
-                    apply_command(command, workspace, backend, status);
+                    apply_command(command, workspace, backend, status, layout_store);
                     if workspace.view().pending_confirmation.is_some() {
                         *pending_deadline = Some(Instant::now() + CONFIRM_TIMEOUT);
                     }
@@ -524,6 +576,7 @@ fn apply_command(
     workspace: &mut Workspace,
     backend: &mut TerminalBackend,
     status: &mut String,
+    layout_store: &mut Option<LayoutStore>,
 ) {
     match workspace.execute(command) {
         Ok(transition) => apply_effects(
@@ -535,6 +588,27 @@ fn apply_command(
         ),
         Err(error) => *status = error.to_string(),
     }
+    save_changed_layout(layout_store, workspace, status);
+}
+
+fn save_changed_layout(
+    layout_store: &mut Option<LayoutStore>,
+    workspace: &Workspace,
+    status: &mut String,
+) {
+    let Some(store) = layout_store else {
+        return;
+    };
+    if let Err(error) = store.save_if_changed(&workspace.layout_snapshot()) {
+        append_status(status, format!("could not save layout: {error}"));
+    }
+}
+
+fn append_status(status: &mut String, message: String) {
+    if !status.is_empty() {
+        status.push_str("; ");
+    }
+    status.push_str(&message);
 }
 fn apply_effects(
     backend: &mut TerminalBackend,

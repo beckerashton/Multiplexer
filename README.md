@@ -17,7 +17,15 @@ terminal mode:
 ```sh
 target/debug/multiplexer --help
 target/debug/multiplexer --config "$HOME/.config/multiplexer/config.toml"
+target/debug/multiplexer --fresh
 ```
+
+The current tab, pane split trees and ratios, focused panes, and stack positions
+are saved in `$XDG_STATE_HOME/multiplexer/layout.toml` (or
+`$HOME/.local/state/multiplexer/layout.toml` when `XDG_STATE_HOME` is unset).
+The next launch restores that layout with new default shells. It does not
+restore running programs, shell state, working directories, or terminal
+contents. Use `--fresh` to start with one pane and replace the saved layout.
 
 With no `--config` argument, built-in defaults are used. A configuration file
 is TOML:

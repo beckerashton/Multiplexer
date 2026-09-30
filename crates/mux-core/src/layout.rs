@@ -1,17 +1,24 @@
-use std::{cmp::Reverse, collections::BTreeMap};
+use std::{
+    cmp::Reverse,
+    collections::{BTreeMap, BTreeSet},
+};
 
 use crate::{Axis, CellRect, Direction, SlotId};
 
 /// A binary partition of terminal cells. `Horizontal` means a horizontal
 /// divider (top/bottom); `Vertical` means a vertical divider (left/right).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LayoutTree {
     root: Node,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Node {
-    Leaf(SlotId),
+    Leaf {
+        slot: SlotId,
+    },
     Split {
         axis: Axis,
         /// Thousandths assigned to the first child.  500 is an even split.
@@ -57,7 +64,7 @@ impl LayoutTree {
 
     pub fn new(root: SlotId) -> Self {
         Self {
-            root: Node::Leaf(root),
+            root: Node::Leaf { slot: root },
         }
     }
 
@@ -69,6 +76,11 @@ impl LayoutTree {
 
     pub fn contains(&self, slot: SlotId) -> bool {
         self.root.contains(slot)
+    }
+
+    /// Checks the invariants required by a persisted layout tree.
+    pub fn is_valid(&self) -> bool {
+        self.root.is_valid(&mut BTreeSet::new())
     }
 
     /// Splits `slot`, retaining it as the first child and placing `new_slot`
@@ -93,8 +105,8 @@ impl LayoutTree {
         *leaf = Node::Split {
             axis,
             ratio,
-            first: Box::new(Node::Leaf(slot)),
-            second: Box::new(Node::Leaf(new_slot)),
+            first: Box::new(Node::Leaf { slot }),
+            second: Box::new(Node::Leaf { slot: new_slot }),
         };
         Ok(new_slot)
     }
@@ -115,7 +127,7 @@ impl LayoutTree {
         if !self.contains(slot) {
             return Err(LayoutError::UnknownSlot(slot));
         }
-        if matches!(&self.root, Node::Leaf(_)) {
+        if matches!(&self.root, Node::Leaf { .. }) {
             return Ok(LayoutRemoval::LastSlot);
         }
         let sibling = self
@@ -123,7 +135,7 @@ impl LayoutTree {
             .sibling_leaf(slot)
             .expect("non-root leaf has a sibling subtree");
         let neighbor = sibling.first_slot().expect("layout subtree has a leaf");
-        let root = std::mem::replace(&mut self.root, Node::Leaf(SlotId(0)));
+        let root = std::mem::replace(&mut self.root, Node::Leaf { slot: SlotId(0) });
         self.root = root.remove_leaf(slot).expect("non-root leaf is removable");
         Ok(LayoutRemoval::Removed { neighbor })
     }
@@ -253,14 +265,31 @@ impl LayoutTree {
 impl Node {
     fn contains(&self, wanted: SlotId) -> bool {
         match self {
-            Self::Leaf(slot) => *slot == wanted,
+            Self::Leaf { slot } => *slot == wanted,
             Self::Split { first, second, .. } => first.contains(wanted) || second.contains(wanted),
+        }
+    }
+
+    fn is_valid(&self, slots: &mut BTreeSet<SlotId>) -> bool {
+        match self {
+            Self::Leaf { slot } => slots.insert(*slot),
+            Self::Split {
+                ratio,
+                first,
+                second,
+                ..
+            } => {
+                *ratio > 0
+                    && *ratio < LayoutTree::RATIO_SCALE
+                    && first.is_valid(slots)
+                    && second.is_valid(slots)
+            }
         }
     }
 
     fn collect_slots(&self, result: &mut Vec<SlotId>) {
         match self {
-            Self::Leaf(slot) => result.push(*slot),
+            Self::Leaf { slot } => result.push(*slot),
             Self::Split { first, second, .. } => {
                 first.collect_slots(result);
                 second.collect_slots(result);
@@ -270,8 +299,8 @@ impl Node {
 
     fn find_leaf_mut(&mut self, wanted: SlotId) -> Option<&mut Node> {
         match self {
-            Self::Leaf(slot) if *slot == wanted => Some(self),
-            Self::Leaf(_) => None,
+            Self::Leaf { slot } if *slot == wanted => Some(self),
+            Self::Leaf { .. } => None,
             Self::Split { first, second, .. } => first
                 .find_leaf_mut(wanted)
                 .or_else(|| second.find_leaf_mut(wanted)),
@@ -280,14 +309,14 @@ impl Node {
 
     fn first_slot(&self) -> Option<SlotId> {
         match self {
-            Self::Leaf(slot) => Some(*slot),
+            Self::Leaf { slot } => Some(*slot),
             Self::Split { first, .. } => first.first_slot(),
         }
     }
 
     fn sibling_leaf(&self, wanted: SlotId) -> Option<&Node> {
         match self {
-            Self::Leaf(_) => None,
+            Self::Leaf { .. } => None,
             Self::Split { first, second, .. } => {
                 if first.contains(wanted) {
                     Some(second)
@@ -304,11 +333,11 @@ impl Node {
 
     fn remove_leaf(self, wanted: SlotId) -> Option<Node> {
         match self {
-            Self::Leaf(slot) => {
+            Self::Leaf { slot } => {
                 if slot == wanted {
                     None
                 } else {
-                    Some(Self::Leaf(slot))
+                    Some(Self::Leaf { slot })
                 }
             }
             Self::Split {
@@ -335,7 +364,7 @@ impl Node {
 
     fn min_span(&self, min_cols: u16, min_rows: u16) -> (u32, u32) {
         match self {
-            Self::Leaf(_) => (min_cols as u32, min_rows as u32),
+            Self::Leaf { .. } => (min_cols as u32, min_rows as u32),
             Self::Split {
                 axis,
                 first,
@@ -360,7 +389,7 @@ impl Node {
         result: &mut BTreeMap<SlotId, CellRect>,
     ) {
         match self {
-            Self::Leaf(slot) => {
+            Self::Leaf { slot } => {
                 result.insert(*slot, bounds);
             }
             Self::Split {
@@ -393,7 +422,7 @@ impl Node {
 
     fn swap_slots(&mut self, a: SlotId, b: SlotId) {
         match self {
-            Self::Leaf(slot) => {
+            Self::Leaf { slot } => {
                 if *slot == a {
                     *slot = b;
                 } else if *slot == b {
@@ -417,7 +446,7 @@ impl Node {
         min: CellRect,
     ) -> Result<(), LayoutError> {
         match self {
-            Self::Leaf(_) => Err(LayoutError::NoNeighbor {
+            Self::Leaf { .. } => Err(LayoutError::NoNeighbor {
                 slot: source,
                 direction: Direction::Right,
             }),

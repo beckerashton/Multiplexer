@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
@@ -134,6 +135,47 @@ pub struct WorkspaceView {
     pub sessions: BTreeMap<SessionId, SessionState>,
 }
 
+const WORKSPACE_LAYOUT_VERSION: u32 = 1;
+const MAX_RESTORED_SESSIONS: usize = 1024;
+
+/// Layout-only workspace data. Session IDs and process specifications are
+/// deliberately omitted so restoration always starts fresh sessions.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceLayout {
+    version: u32,
+    active_tab: usize,
+    tabs: Vec<SavedTabLayout>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SavedTabLayout {
+    number: usize,
+    focused_slot: SlotId,
+    layout: LayoutTree,
+    stacks: Vec<SavedStackLayout>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SavedStackLayout {
+    slot: SlotId,
+    members: usize,
+    active: Option<usize>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LayoutRestoreError(String);
+
+impl std::fmt::Display for LayoutRestoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for LayoutRestoreError {}
+
 /// A pure owner of tiling, tabs, session identity, and stack order. It never
 /// starts or terminates a process itself; callers apply returned effects.
 #[derive(Clone, Debug)]
@@ -188,6 +230,186 @@ impl Workspace {
                 changed: true,
             },
         )
+    }
+
+    /// Returns the serializable parts of this workspace that define its layout.
+    pub fn layout_snapshot(&self) -> WorkspaceLayout {
+        WorkspaceLayout {
+            version: WORKSPACE_LAYOUT_VERSION,
+            active_tab: self.active_tab_ref().number,
+            tabs: self
+                .tabs
+                .iter()
+                .map(|tab| SavedTabLayout {
+                    number: tab.number,
+                    focused_slot: tab.focused_slot,
+                    layout: tab.layout.clone(),
+                    stacks: tab
+                        .layout
+                        .slots()
+                        .into_iter()
+                        .map(|slot| {
+                            let stack = &tab.stacks[&slot];
+                            SavedStackLayout {
+                                slot,
+                                members: stack.sessions().len(),
+                                active: stack.active_index(),
+                            }
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+
+    /// Rebuilds a workspace from layout metadata and requests fresh sessions.
+    pub fn restore_layout(
+        saved: WorkspaceLayout,
+        default_session: SessionSpec,
+    ) -> Result<(Self, Transition), LayoutRestoreError> {
+        let invalid = |reason: &str| LayoutRestoreError(reason.to_owned());
+        if saved.version != WORKSPACE_LAYOUT_VERSION {
+            return Err(invalid("unsupported saved layout version"));
+        }
+        if saved.tabs.is_empty() {
+            return Err(invalid("saved layout has no tabs"));
+        }
+
+        let mut tab_numbers = BTreeSet::new();
+        let mut all_slots = BTreeSet::new();
+        let mut tabs = Vec::with_capacity(saved.tabs.len());
+        let mut sessions = BTreeMap::new();
+        let mut effects = Vec::new();
+        let mut next_session = 1_u64;
+        let mut restored_session_count = 0_usize;
+
+        for saved_tab in saved.tabs {
+            if saved_tab.number == 0 || !tab_numbers.insert(saved_tab.number) {
+                return Err(invalid(
+                    "saved layout has an invalid or duplicate tab number",
+                ));
+            }
+            if !saved_tab.layout.is_valid() {
+                return Err(invalid("saved layout has an invalid split tree"));
+            }
+            let slots = saved_tab.layout.slots();
+            if !slots.contains(&saved_tab.focused_slot) {
+                return Err(invalid("saved focused pane is missing from its tab"));
+            }
+            for slot in &slots {
+                if slot.0 == 0 || !all_slots.insert(*slot) {
+                    return Err(invalid("saved layout has an invalid or duplicate pane id"));
+                }
+            }
+
+            let mut saved_stacks = BTreeMap::new();
+            for stack in saved_tab.stacks {
+                if stack.slot.0 == 0 || saved_stacks.insert(stack.slot, stack).is_some() {
+                    return Err(invalid(
+                        "saved layout has an invalid or duplicate pane stack",
+                    ));
+                }
+            }
+            if saved_stacks.len() != slots.len()
+                || slots.iter().any(|slot| !saved_stacks.contains_key(slot))
+            {
+                return Err(invalid("saved pane stacks do not match the split tree"));
+            }
+
+            let mut stacks = BTreeMap::new();
+            for slot in slots {
+                let saved_stack = saved_stacks.remove(&slot).expect("stack checked above");
+                let stack = if saved_stack.members == 0 {
+                    if saved_stack.active.is_some() {
+                        return Err(invalid("empty saved pane has an active stack member"));
+                    }
+                    SlotStack::default()
+                } else {
+                    let active = saved_stack
+                        .active
+                        .filter(|index| *index < saved_stack.members)
+                        .ok_or_else(|| invalid("saved pane has an invalid active stack member"))?;
+                    restored_session_count = restored_session_count
+                        .checked_add(saved_stack.members)
+                        .filter(|count| *count <= MAX_RESTORED_SESSIONS)
+                        .ok_or_else(|| invalid("saved layout contains too many sessions"))?;
+
+                    let mut stack = SlotStack::default();
+                    for _ in 0..saved_stack.members {
+                        let id = SessionId(next_session);
+                        next_session = next_session
+                            .checked_add(1)
+                            .ok_or_else(|| invalid("saved layout has too many sessions"))?;
+                        sessions.insert(id, Session::new(id, default_session.clone()));
+                        effects.push(LifecycleEffect::Spawn {
+                            session: id,
+                            spec: default_session.clone(),
+                        });
+                        if stack.is_empty() {
+                            stack = SlotStack::with_session(id);
+                        } else {
+                            stack.add(id);
+                        }
+                    }
+                    stack.select(active);
+                    stack
+                };
+                stacks.insert(slot, stack);
+            }
+
+            let id = TabId(
+                u64::try_from(tabs.len() + 1)
+                    .map_err(|_| invalid("saved layout has too many tabs"))?,
+            );
+            tabs.push(Tab {
+                id,
+                number: saved_tab.number,
+                layout: saved_tab.layout,
+                focused_slot: saved_tab.focused_slot,
+                stacks,
+                manual_broadcast_targets: BTreeSet::new(),
+            });
+        }
+
+        if !tab_numbers.contains(&saved.active_tab) {
+            return Err(invalid("saved active tab is missing"));
+        }
+        tabs.sort_by_key(|tab| tab.number);
+        let active_tab = tabs
+            .iter()
+            .find(|tab| tab.number == saved.active_tab)
+            .expect("active tab number validated")
+            .id;
+        let next_tab = u64::try_from(tabs.len())
+            .ok()
+            .and_then(|count| count.checked_add(1))
+            .ok_or_else(|| invalid("saved layout has too many tabs"))?;
+        let next_slot = all_slots
+            .iter()
+            .map(|slot| slot.0)
+            .max()
+            .and_then(|slot| slot.checked_add(1))
+            .ok_or_else(|| invalid("saved layout has no panes or exhausted pane ids"))?;
+
+        Ok((
+            Self {
+                default_session,
+                next_tab,
+                next_slot,
+                next_session,
+                tabs,
+                active_tab,
+                sessions,
+                bounds: DEFAULT_BOUNDS,
+                minimum_pane_size: MIN_PANE_SIZE,
+                broadcast_scope: BroadcastScope::Focused,
+                pending_confirmation: None,
+            },
+            Transition {
+                effects,
+                changed: true,
+            },
+        ))
     }
 
     pub fn set_bounds(&mut self, bounds: CellRect) {
