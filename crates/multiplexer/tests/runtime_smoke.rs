@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 use std::{
     fs,
     io::{Read, Write},
@@ -84,6 +86,8 @@ fn shell_receives_exact_input_then_confirmed_quit_exits() {
     let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_multiplexer"));
     command.cwd(&directory);
     command.env("SHELL", "/bin/sh");
+    command.env("XDG_STATE_HOME", directory.join("state"));
+    command.arg("--fresh");
     let mut child = pair
         .slave
         .spawn_command(command)
@@ -176,6 +180,8 @@ fn assert_raw_input_mode(input: &[u8], expected: &[u8], application: bool) {
     let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_multiplexer"));
     command.cwd(&directory);
     command.env("SHELL", "/bin/sh");
+    command.env("XDG_STATE_HOME", directory.join("state"));
+    command.arg("--fresh");
     let mut child = pair
         .slave
         .spawn_command(command)

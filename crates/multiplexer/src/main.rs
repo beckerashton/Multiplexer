@@ -12,10 +12,9 @@ mod selection_mode;
 mod terminal_guard;
 
 use std::{
-    io::{self, Read},
+    io,
     path::PathBuf,
     sync::mpsc,
-    thread,
     time::{Duration, Instant},
 };
 
@@ -61,17 +60,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let config = RuntimeConfig::load(config_path.as_deref())?;
+    let default_shell = backend::default_shell()?;
     let guard = TerminalGuard::enter()?;
-    run(guard, config.bindings, fresh_layout)
+    run(guard, config.bindings, fresh_layout, default_shell)
 }
 
 fn run(
     _guard: TerminalGuard,
     config: BindingConfig,
     fresh_layout: bool,
+    default_shell: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let default_session = SessionSpec {
-        program: PathBuf::from(std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())),
+        program: default_shell,
         args: Vec::new(),
         cwd: std::env::current_dir().ok(),
     };
@@ -108,9 +109,7 @@ fn run(
         },
         None => Workspace::new(default_session.clone()),
     };
-    let mut layout_store = state_path
-        .ok()
-        .map(|path| LayoutStore::new(path, workspace.layout_snapshot()));
+    let mut layout_store = state_path.ok().map(LayoutStore::new);
     sync_bounds(&mut workspace)?;
     let mut backend = TerminalBackend::new(10_000);
     let mut status = startup_status;
@@ -136,15 +135,7 @@ fn run(
     let mut pending_deadline = None;
     let mut quit_deadline = None;
     let (input_tx, input_rx) = mpsc::sync_channel(64);
-    thread::spawn(move || {
-        let mut stdin = io::stdin().lock();
-        let mut bytes = [0_u8; 4096];
-        while let Ok(count) = stdin.read(&mut bytes) {
-            if count == 0 || input_tx.send(bytes[..count].to_vec()).is_err() {
-                break;
-            }
-        }
-    });
+    raw_input::start_reader(input_tx);
     let mut renderer = render::Renderer::new()?;
     let mut dirty = true;
     loop {

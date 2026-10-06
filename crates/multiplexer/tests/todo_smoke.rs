@@ -1,6 +1,10 @@
+#![cfg(unix)]
+
 use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 use std::{
+    fs,
     io::{Read, Write},
+    path::PathBuf,
     sync::mpsc,
     thread,
     time::{Duration, Instant},
@@ -11,15 +15,26 @@ struct Harness {
     writer: Box<dyn Write + Send>,
     output: mpsc::Receiver<Vec<u8>>,
     screen: vt100::Parser,
+    directory: PathBuf,
 }
 impl Drop for Harness {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        let _ = fs::remove_dir_all(&self.directory);
     }
 }
 impl Harness {
     fn new() -> Self {
+        let directory = std::env::temp_dir().join(format!(
+            "multiplexer-todo-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&directory).unwrap();
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: 67,
@@ -33,6 +48,8 @@ impl Harness {
         command.env("ENV", "/dev/null");
         command.env("PS1", "todo-shell> ");
         command.env("TERM", "xterm-256color");
+        command.env("XDG_STATE_HOME", directory.join("state"));
+        command.arg("--fresh");
         let child = pair.slave.spawn_command(command).unwrap();
         let writer = pair.master.take_writer().unwrap();
         let mut reader = pair.master.try_clone_reader().unwrap();
@@ -50,6 +67,7 @@ impl Harness {
             writer,
             output,
             screen: vt100::Parser::new(67, 240, 0),
+            directory,
         }
     }
     fn send(&mut self, bytes: &[u8]) {

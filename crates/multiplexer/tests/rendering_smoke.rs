@@ -1,5 +1,9 @@
+#![cfg(unix)]
+
 use std::{
+    fs,
     io::{Read, Write},
+    path::PathBuf,
     sync::mpsc::{self, Receiver},
     thread,
     time::{Duration, Instant},
@@ -7,11 +11,12 @@ use std::{
 
 use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 
-struct ChildGuard(Box<dyn Child + Send + Sync>);
+struct ChildGuard(Box<dyn Child + Send + Sync>, PathBuf);
 impl Drop for ChildGuard {
     fn drop(&mut self) {
         let _ = self.0.kill();
         let _ = self.0.wait();
+        let _ = fs::remove_dir_all(&self.1);
     }
 }
 
@@ -31,6 +36,11 @@ fn settled_output(rx: &Receiver<Vec<u8>>) -> Vec<u8> {
 #[test]
 fn fullscreen_mouse_typing_and_resize_use_incremental_output() {
     for (cols, rows) in [(240, 67), (320, 90)] {
+        let directory = std::env::temp_dir().join(format!(
+            "multiplexer-rendering-{}-{cols}-{rows}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&directory).unwrap();
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows,
@@ -44,7 +54,9 @@ fn fullscreen_mouse_typing_and_resize_use_incremental_output() {
         command.env("ENV", "/dev/null");
         command.env("PS1", "mux-test> ");
         command.env("TERM", "xterm-256color");
-        let mut child = ChildGuard(pair.slave.spawn_command(command).unwrap());
+        command.env("XDG_STATE_HOME", directory.join("state"));
+        command.arg("--fresh");
+        let mut child = ChildGuard(pair.slave.spawn_command(command).unwrap(), directory);
         drop(pair.slave);
         let mut writer = pair.master.take_writer().unwrap();
         let mut reader = pair.master.try_clone_reader().unwrap();

@@ -4,8 +4,9 @@ use std::{
     process::{Command, Stdio},
 };
 
-/// Host clipboard selection. Wayland tries `wl-copy`, then X11 helpers. X11 tries `xclip`
-/// before `xsel`. The optional path is private and exists only to make helper
+/// Host clipboard selection. Windows uses PowerShell's clipboard cmdlet.
+/// Wayland tries `wl-copy`, then X11 helpers. X11 tries `xclip` before `xsel`.
+/// The optional path is private and exists only to make helper
 /// discovery deterministic in tests without changing the user's environment.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClipboardEnvironment {
@@ -22,7 +23,7 @@ impl ClipboardEnvironment {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn with_search_path(wayland: bool, search_path: OsString) -> Self {
         Self {
             wayland,
@@ -68,13 +69,26 @@ impl std::fmt::Display for ClipboardError {
 impl std::error::Error for ClipboardError {}
 
 /// Copies UTF-8 text through a local helper. The text is written to stdin;
-/// it is never included in a command line or evaluated by a shell. Selection
+/// it is never included in a command line or evaluated as shell code. Selection
 /// ownership stays with the caller, so every error leaves it available to
 /// retry or inspect.
 pub fn copy_with_helper(
     text: &str,
     environment: &ClipboardEnvironment,
 ) -> Result<(), ClipboardError> {
+    #[cfg(windows)]
+    let candidates: &[(&str, &[&str])] = &[(
+        "powershell.exe",
+        &[
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-STA",
+            "-Command",
+            "$ErrorActionPreference = 'Stop'; $reader = [System.IO.StreamReader]::new([Console]::OpenStandardInput(), [System.Text.UTF8Encoding]::new($false), $false); $text = $reader.ReadToEnd(); if ($text.Length -eq 0) { Set-Clipboard -Value $null } else { Set-Clipboard -Value $text }",
+        ],
+    )];
+    #[cfg(not(windows))]
     let candidates: &[(&str, &[&str])] = if environment.wayland {
         &[
             ("wl-copy", &[]),
@@ -116,6 +130,12 @@ fn invoke(
     environment: &ClipboardEnvironment,
 ) -> Result<(), InvokeError> {
     let mut command = Command::new(helper);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
     command
         .args(args)
         .stdin(Stdio::piped())
@@ -148,7 +168,7 @@ fn invoke(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::{
         fs,

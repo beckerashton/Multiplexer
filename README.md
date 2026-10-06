@@ -1,10 +1,50 @@
 # Multiplexer
 
-Multiplexer is a Linux-first terminal-hosted workspace for shell, Neovim,
+Multiplexer is a terminal-hosted workspace for shell, Neovim,
 SSH, and Codex sessions. It keeps terminal processes in stable PTY-backed
-sessions while panes, stacks, and tabs are rearranged.
+sessions while panes, stacks, and tabs are rearranged. Linux and native Windows
+use the same Cargo workspace; Windows uses ConPTY and native console input.
 
-Build and test with the project-local Rust toolchain:
+## Build and run
+
+Install Rust with Rustup; `rust-toolchain.toml` selects Rust 1.85.0. On either
+platform:
+
+```text
+cargo build --workspace --release --locked
+cargo test --workspace --locked
+```
+
+On Windows, use Windows 10 version 1809 or newer, or Windows 11, in Windows
+Terminal or another console host with VT support. From PowerShell:
+
+```powershell
+.\target\release\multiplexer.exe --help
+.\target\release\multiplexer.exe --fresh
+.\target\release\multiplexer.exe --config "$env:USERPROFILE\multiplexer.toml"
+```
+
+Windows starts modern PowerShell 7 (`pwsh.exe`) in each new pane. Install
+PowerShell 7 first; Multiplexer checks the standard installation under
+`%ProgramFiles%\PowerShell\7`, then `PATH`, and reports an installation error
+before entering terminal mode if it is missing. `COMSPEC` does not select the
+pane shell. To choose another shell executable, set `MULTIPLEXER_SHELL`:
+
+```powershell
+$env:MULTIPLEXER_SHELL = (Get-Command cmd.exe).Source
+.\target\release\multiplexer.exe
+```
+
+Windows Terminal captures several default Ctrl-Alt-number shortcuts. Apply the
+[Windows Terminal setup](docs/windows-terminal.md) to pass those keys through
+to Multiplexer; that guide includes a mergeable settings snippet and editor
+paste/shortcut options.
+
+On Unix, new panes use `$SHELL`, falling back to `/bin/sh`.
+The CI workflow builds and tests both platforms and uploads separate native
+Linux and Windows binaries. A Linux binary cannot run directly on Windows.
+
+For the existing project-local Linux Rust installation:
 
 ```sh
 RUSTUP_HOME="$PWD/.tools/rustup" CARGO_HOME="$PWD/.tools/cargo" \
@@ -23,6 +63,8 @@ target/debug/multiplexer --fresh
 The current tab, pane split trees and ratios, focused panes, and stack positions
 are saved in `$XDG_STATE_HOME/multiplexer/layout.toml` (or
 `$HOME/.local/state/multiplexer/layout.toml` when `XDG_STATE_HOME` is unset).
+Windows saves `%LOCALAPPDATA%\multiplexer\layout.toml`, falling back to
+`%USERPROFILE%\AppData\Local\multiplexer\layout.toml`.
 The next launch restores that layout with new default shells. It does not
 restore running programs, shell state, working directories, or terminal
 contents. Use `--fresh` to start with one pane and replace the saved layout.
@@ -89,6 +131,32 @@ binding after configuration is loaded.
 
 ## Runtime smoke coverage
 
+The cross-platform suite includes argument/configuration checks, layout save
+replacement and restoration, and the pure layout/input model. Unix-specific
+PTY checks run on Unix. The native Windows `windows_smoke` check opens a
+ConPTY, sends input to PowerShell 7, creates a second pane, verifies the saved
+layout, and confirms quit:
+
+```powershell
+cargo test -p multiplexer --test windows_smoke --locked
+```
+
+An optional native clipboard check covers exact Unicode, mixed/trailing
+newlines, literal shell-looking text, empty text, and long selections. It is
+ignored by normal workspace tests because it overwrites the system clipboard.
+The Windows CI job runs it explicitly on its disposable hosted runner.
+Run it only in a disposable Windows desktop/session:
+
+```powershell
+cargo test -p multiplexer --test windows_clipboard_test --locked -- --ignored
+```
+
+Windows runtime validation requires running this check on Windows; a cross
+compilation check covers compilation only. Before a Windows release, also
+manually check PowerShell and `cmd.exe` input, pane/tab/stack navigation,
+Ctrl-Alt-number carry, terminal resize, Neovim Escape and `:wq`, scrollback and
+mouse forwarding, Unicode clipboard copy, and console restoration after quit.
+
 The current focused PTY checks include a raw standalone Escape and exact shell
 input (`runtime_smoke`), real `/usr/bin/nvim` editing with `hjkl`, Escape,
 `:wq`, and shell recovery (`neovim_smoke`), plus visible-stack broadcast,
@@ -105,8 +173,8 @@ RUSTUP_HOME="$PWD/.tools/rustup" CARGO_HOME="$PWD/.tools/cargo" \
     --test terminal_restore
 ```
 
-These checks do not cover SSH or Codex sessions, real host clipboard provider
-behavior, bracketed-paste delivery, or manual broadcast targets; those remain
+The normal workspace checks do not cover SSH or Codex sessions, real host
+clipboard provider behavior, bracketed-paste delivery, or manual broadcast targets; those remain
 runtime acceptance work.
 
 The default leader is `Ctrl-b`. Bare application input passes through. The
@@ -174,7 +242,12 @@ Tab numbers are stable when other tabs disappear. When the last session exits
 or is killed, the active tab stays empty until you leave it, then is removed.
 Use leader `|`, `-`, or `a` to start a shell in an empty tab.
 
-Ctrl-Alt-number requires a terminal that can distinguish modified digits. The
+On Windows, native console key events distinguish Ctrl-Alt-number directly.
+Windows reports AltGr as Ctrl+Alt: symbols and non-ASCII characters remain text,
+but AltGr combinations producing ASCII letters or digits may trigger the
+corresponding Ctrl-Alt shortcut; rebind those shortcuts if your layout needs it.
+
+On Unix, Ctrl-Alt-number requires a terminal that can distinguish modified digits. The
 host requests Kitty keyboard disambiguation and accepts both
 [CSI-u](https://sw.kovidgoyal.net/kitty/keyboard-protocol/) and
 [xterm modifyOtherKeys](https://invisible-island.net/xterm/modified-keys.html).
@@ -225,7 +298,10 @@ The status bar shows the mode and buffer position. Other keys, mouse reports,
 and pasted text are consumed while selecting; they never reach the application
 or broadcast targets. A terminal resize cancels selection.
 
-Copy tries `wl-copy` on Wayland, then `xclip` and `xsel` as fallbacks; X11
+On Windows, copy passes UTF-8 text to the built-in Windows PowerShell
+`powershell.exe` helper, which writes Unicode text with `Set-Clipboard`.
+This helper is independent of the interactive pane shell (`pwsh.exe` by default).
+On Unix, copy tries `wl-copy` on Wayland, then `xclip` and `xsel` as fallbacks; X11
 uses `xclip` then `xsel`. On failure the selection stays open, the status bar
 shows the error, and `y` retries. The old `copy_selection` configuration name
 is accepted as an alias for `selection_mode`.

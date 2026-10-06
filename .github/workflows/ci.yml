@@ -1,0 +1,47 @@
+name: Build and test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: multiplexer-linux-x86_64
+            binary: target/release/multiplexer
+          - os: windows-latest
+            artifact: multiplexer-windows-x86_64
+            binary: target/release/multiplexer.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup toolchain install 1.85.0 --profile minimal --component rustfmt --component clippy
+      - name: Install Neovim for Unix runtime checks
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y neovim
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Check lints
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Test native platform
+        run: cargo test --workspace --locked
+      - name: Verify clipboard in disposable Windows runner
+        if: runner.os == 'Windows'
+        run: cargo test -p multiplexer --test windows_clipboard_test --locked -- --ignored
+      - name: Build release
+        run: cargo build --workspace --release --locked
+      - name: Upload native binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.binary }}
+          if-no-files-found: error

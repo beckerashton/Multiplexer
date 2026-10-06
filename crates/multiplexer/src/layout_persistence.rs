@@ -22,24 +22,54 @@ pub enum LayoutStoreError {
     #[error("invalid layout file {path}: {source}")]
     Parse {
         path: PathBuf,
-        source: toml::de::Error,
+        source: Box<toml::de::Error>,
     },
     #[error("cannot encode layout: {0}")]
     Encode(#[from] toml::ser::Error),
-    #[error("no absolute XDG_STATE_HOME or HOME directory is available")]
+    #[error("no absolute state directory is available")]
     NoStateDirectory,
 }
 
 pub fn default_path() -> Result<PathBuf, LayoutStoreError> {
+    #[cfg(windows)]
+    let directory = windows_state_directory(
+        env::var_os("LOCALAPPDATA").map(PathBuf::from),
+        env::var_os("USERPROFILE").map(PathBuf::from),
+    )?;
+
+    #[cfg(not(windows))]
+    let directory = state_directory()?;
+
+    Ok(directory.join("multiplexer/layout.toml"))
+}
+
+#[cfg(windows)]
+fn windows_state_directory(
+    local_app_data: Option<PathBuf>,
+    user_profile: Option<PathBuf>,
+) -> Result<PathBuf, LayoutStoreError> {
+    local_app_data
+        .filter(|path| path.is_absolute())
+        .or_else(|| {
+            user_profile
+                .filter(|path| path.is_absolute())
+                .map(|home| home.join("AppData/Local"))
+        })
+        .ok_or(LayoutStoreError::NoStateDirectory)
+}
+
+#[cfg(not(windows))]
+fn state_directory() -> Result<PathBuf, LayoutStoreError> {
     if let Some(path) = env::var_os("XDG_STATE_HOME").map(PathBuf::from) {
         if path.is_absolute() {
-            return Ok(path.join("multiplexer/layout.toml"));
+            return Ok(path);
         }
     }
     let home = env::var_os("HOME")
         .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
         .ok_or(LayoutStoreError::NoStateDirectory)?;
-    Ok(home.join(".local/state/multiplexer/layout.toml"))
+    Ok(home.join(".local/state"))
 }
 
 pub fn load(path: &Path) -> Result<Option<WorkspaceLayout>, LayoutStoreError> {
@@ -68,34 +98,35 @@ pub fn load(path: &Path) -> Result<Option<WorkspaceLayout>, LayoutStoreError> {
         .map(Some)
         .map_err(|source| LayoutStoreError::Parse {
             path: path.to_owned(),
-            source,
+            source: Box::new(source),
         })
 }
 
 pub struct LayoutStore {
     path: PathBuf,
-    last_attempted: WorkspaceLayout,
+    last_saved: Option<WorkspaceLayout>,
 }
 
 impl LayoutStore {
-    pub fn new(path: PathBuf, initial: WorkspaceLayout) -> Self {
+    pub fn new(path: PathBuf) -> Self {
         Self {
             path,
-            last_attempted: initial,
+            last_saved: None,
         }
     }
 
     pub fn save_initial(&mut self, layout: &WorkspaceLayout) -> Result<(), LayoutStoreError> {
-        self.last_attempted = layout.clone();
-        write_atomic(&self.path, layout)
+        write_atomic(&self.path, layout)?;
+        self.last_saved = Some(layout.clone());
+        Ok(())
     }
 
     pub fn save_if_changed(&mut self, layout: &WorkspaceLayout) -> Result<bool, LayoutStoreError> {
-        if self.last_attempted == *layout {
+        if self.last_saved.as_ref() == Some(layout) {
             return Ok(false);
         }
-        self.last_attempted = layout.clone();
         write_atomic(&self.path, layout)?;
+        self.last_saved = Some(layout.clone());
         Ok(true)
     }
 }
@@ -130,4 +161,33 @@ fn write_atomic(path: &Path, layout: &WorkspaceLayout) -> Result<(), LayoutStore
         });
     }
     Ok(())
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    #[test]
+    fn state_directory_prefers_absolute_local_app_data_and_falls_back_to_profile() {
+        let local = PathBuf::from(r"C:\Users\test\AppData\Local");
+        let profile = PathBuf::from(r"C:\Users\test");
+        assert_eq!(
+            windows_state_directory(Some(local.clone()), Some(profile.clone())).unwrap(),
+            local
+        );
+        for local in [None, Some(PathBuf::from("relative"))] {
+            assert_eq!(
+                windows_state_directory(local, Some(profile.clone())).unwrap(),
+                profile.join("AppData/Local")
+            );
+        }
+        assert!(matches!(
+            windows_state_directory(None, Some(PathBuf::from("relative"))),
+            Err(LayoutStoreError::NoStateDirectory)
+        ));
+        assert!(matches!(
+            windows_state_directory(None, None),
+            Err(LayoutStoreError::NoStateDirectory)
+        ));
+    }
 }

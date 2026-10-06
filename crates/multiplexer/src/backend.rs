@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     io::{self, Read, Write},
+    path::PathBuf,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -11,6 +12,72 @@ use std::{
 
 use mux_core::{SessionId, SessionSpec};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
+
+pub fn default_shell() -> io::Result<PathBuf> {
+    #[cfg(windows)]
+    {
+        select_windows_shell(
+            std::env::var_os("MULTIPLEXER_SHELL").as_deref(),
+            std::env::var_os("ProgramFiles").as_deref(),
+            std::env::var_os("PATH").as_deref(),
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(std::env::var_os("SHELL")
+            .filter(|shell| !shell.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/bin/sh")))
+    }
+}
+
+#[cfg(any(windows, test))]
+fn select_windows_shell(
+    explicit: Option<&std::ffi::OsStr>,
+    program_files: Option<&std::ffi::OsStr>,
+    search_path: Option<&std::ffi::OsStr>,
+) -> io::Result<PathBuf> {
+    if let Some(shell) = explicit.filter(|shell| !shell.is_empty()) {
+        return find_windows_executable(shell, search_path).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound,
+                format!("MULTIPLEXER_SHELL executable {:?} was not found; set it to an executable path or name on PATH", shell))
+        });
+    }
+    if let Some(program_files) = program_files.filter(|path| !path.is_empty()) {
+        let installed = PathBuf::from(program_files).join("PowerShell/7/pwsh.exe");
+        if installed.is_file() {
+            return Ok(installed);
+        }
+    }
+    find_windows_executable(std::ffi::OsStr::new("pwsh.exe"), search_path).ok_or_else(|| {
+        io::Error::new(io::ErrorKind::NotFound,
+            "PowerShell 7 (pwsh.exe) was not found. Install it with `winget install Microsoft.PowerShell`, add it to PATH, or set MULTIPLEXER_SHELL to an explicit shell executable")
+    })
+}
+
+#[cfg(any(windows, test))]
+fn find_windows_executable(
+    program: &std::ffi::OsStr,
+    search_path: Option<&std::ffi::OsStr>,
+) -> Option<PathBuf> {
+    let program = PathBuf::from(program);
+    if program.is_absolute() || program.components().count() > 1 {
+        return program.is_file().then_some(program);
+    }
+    for directory in std::env::split_paths(search_path?) {
+        let candidate = directory.join(&program);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        if candidate.extension().is_none() {
+            let candidate = candidate.with_extension("exe");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
 
 #[derive(Debug)]
 pub enum TerminalEvent {
@@ -51,11 +118,48 @@ struct TerminalInstance {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
     parser: vt100::Parser,
-    #[cfg(test)]
+    #[cfg(any(test, windows))]
     pid: Option<u32>,
     live: Arc<AtomicBool>,
     #[cfg(unix)]
     process_group: Option<libc::pid_t>,
+}
+
+impl TerminalInstance {
+    fn kill(&self) -> Result<(), TerminalError> {
+        #[cfg(unix)]
+        if let Some(group) = self.process_group {
+            // A foreground job can have descendants beyond the spawned shell.
+            unsafe {
+                libc::kill(-group, libc::SIGTERM);
+            }
+        }
+        #[cfg(windows)]
+        if let Some(pid) = self.pid {
+            use std::os::windows::process::CommandExt;
+            use std::process::{Command, Stdio};
+
+            // portable-pty's Windows killer targets only the shell. taskkill
+            // also closes its descendants; the handle-based killer is fallback.
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            if Command::new("taskkill.exe")
+                .args(["/PID", &pid.to_string(), "/T", "/F"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .creation_flags(CREATE_NO_WINDOW)
+                .status()
+                .is_ok_and(|status| status.success())
+            {
+                return Ok(());
+            }
+        }
+        self.killer
+            .lock()
+            .map_err(|_| TerminalError::Pty("PTY killer lock poisoned".into()))?
+            .kill()?;
+        Ok(())
+    }
 }
 
 /// Owns all OS-facing terminal state. It deliberately has no layout, tab, or
@@ -101,31 +205,34 @@ impl TerminalBackend {
         }
         command.env("TERM", "xterm-256color");
 
+        let reader = pair
+            .master
+            .try_clone_reader()
+            .map_err(|error| TerminalError::Pty(error.to_string()))?;
+        let writer = Arc::new(Mutex::new(
+            pair.master
+                .take_writer()
+                .map_err(|error| TerminalError::Pty(error.to_string()))?,
+        ));
+        // ConPTY inherits the cursor asynchronously. Its reader must be ready
+        // to answer the cursor query even while CreateProcess is running.
+        spawn_reader(
+            id,
+            reader,
+            self.event_tx.clone(),
+            #[cfg(windows)]
+            writer.clone(),
+        );
         let child = pair
             .slave
             .spawn_command(command)
             .map_err(|error| TerminalError::Pty(error.to_string()))?;
-        #[cfg(test)]
+        #[cfg(any(test, windows))]
         let pid = child.process_id();
         let killer = Arc::new(Mutex::new(child.clone_killer()));
-        let reader = match pair.master.try_clone_reader() {
-            Ok(reader) => reader,
-            Err(error) => {
-                let _ = killer.lock().map(|mut killer| killer.kill());
-                return Err(TerminalError::Pty(error.to_string()));
-            }
-        };
-        let writer = match pair.master.take_writer() {
-            Ok(writer) => Arc::new(Mutex::new(writer)),
-            Err(error) => {
-                let _ = killer.lock().map(|mut killer| killer.kill());
-                return Err(TerminalError::Pty(error.to_string()));
-            }
-        };
         #[cfg(unix)]
         let process_group = pair.master.process_group_leader();
 
-        spawn_reader(id, reader, self.event_tx.clone());
         let live = Arc::new(AtomicBool::new(true));
         spawn_waiter(id, child, self.event_tx.clone(), live.clone());
         self.terminals.insert(
@@ -135,7 +242,7 @@ impl TerminalBackend {
                 writer,
                 killer,
                 parser: vt100::Parser::new(size.1.max(1), size.0.max(1), self.scrollback_rows),
-                #[cfg(test)]
+                #[cfg(any(test, windows))]
                 pid,
                 live,
                 #[cfg(unix)]
@@ -186,20 +293,7 @@ impl TerminalBackend {
         if !terminal.live.swap(false, Ordering::AcqRel) {
             return Ok(());
         }
-        #[cfg(unix)]
-        if let Some(group) = terminal.process_group {
-            // A foreground job can have descendants beyond the spawned shell.
-            // The PTY session group is the contained, exact kill target.
-            unsafe {
-                libc::kill(-group, libc::SIGTERM);
-            }
-        }
-        terminal
-            .killer
-            .lock()
-            .map_err(|_| TerminalError::Pty("PTY killer lock poisoned".into()))?
-            .kill()?;
-        Ok(())
+        terminal.kill()
     }
 
     #[cfg(test)]
@@ -249,13 +343,16 @@ impl TerminalBackend {
 
 impl Drop for TerminalBackend {
     fn drop(&mut self) {
+        // Release readers blocked on the bounded UI queue before closing PTYs.
+        // Windows readers keep draining so ClosePseudoConsole can finish.
+        let (sender, receiver) = mpsc::sync_channel(1);
+        drop(sender);
+        self.event_rx = receiver;
         for terminal in self.terminals.values() {
             if !terminal.live.swap(false, Ordering::AcqRel) {
                 continue;
             }
-            if let Ok(mut killer) = terminal.killer.lock() {
-                let _ = killer.kill();
-            }
+            let _ = terminal.kill();
         }
     }
 }
@@ -273,34 +370,90 @@ fn spawn_reader(
     session: SessionId,
     mut reader: Box<dyn Read + Send>,
     sender: mpsc::SyncSender<TerminalEvent>,
+    #[cfg(windows)] writer: Arc<Mutex<Box<dyn Write + Send>>>,
 ) {
     thread::spawn(move || {
         let mut buffer = vec![0_u8; 16 * 1024];
+        #[cfg(windows)]
+        let mut cursor_query = CursorInheritance::default();
+        #[cfg(windows)]
+        let mut sender = Some(sender);
+        #[cfg(not(windows))]
+        let sender = Some(sender);
         loop {
             match reader.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(count) => {
-                    if sender
-                        .send(TerminalEvent::Output {
-                            session,
-                            bytes: buffer[..count].to_vec(),
-                        })
-                        .is_err()
-                    {
+                    #[cfg(windows)]
+                    if cursor_query.push(&buffer[..count]) {
+                        if let Ok(mut writer) = writer.lock() {
+                            // Each pane begins at its own top-left position.
+                            let _ = writer.write_all(b"\x1b[1;1R");
+                            let _ = writer.flush();
+                        }
+                    }
+                    if sender.as_ref().is_some_and(|sender| {
+                        sender
+                            .send(TerminalEvent::Output {
+                                session,
+                                bytes: buffer[..count].to_vec(),
+                            })
+                            .is_err()
+                    }) {
+                        #[cfg(not(windows))]
                         break;
+                        #[cfg(windows)]
+                        {
+                            sender = None;
+                        }
                     }
                 }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                #[cfg(windows)]
+                Err(error) if error.kind() == io::ErrorKind::BrokenPipe => break,
                 Err(error) => {
-                    let _ = sender.send(TerminalEvent::ReadError {
-                        session,
-                        message: error.to_string(),
-                    });
+                    if let Some(sender) = &sender {
+                        let _ = sender.send(TerminalEvent::ReadError {
+                            session,
+                            message: error.to_string(),
+                        });
+                    }
                     break;
                 }
             }
         }
     });
+}
+
+/// Only ConPTY's initial inheritance query is answered; later application
+/// queries must not receive a fabricated cursor position.
+#[cfg(any(windows, test))]
+#[derive(Default)]
+struct CursorInheritance {
+    matched: usize,
+    answered: bool,
+}
+
+#[cfg(any(windows, test))]
+impl CursorInheritance {
+    fn push(&mut self, bytes: &[u8]) -> bool {
+        if self.answered {
+            return false;
+        }
+        const QUERY: &[u8] = b"\x1b[6n";
+        for &byte in bytes {
+            self.matched = if byte == QUERY[self.matched] {
+                self.matched + 1
+            } else {
+                usize::from(byte == QUERY[0])
+            };
+            if self.matched == QUERY.len() {
+                self.answered = true;
+                return true;
+            }
+        }
+        false
+    }
 }
 
 fn spawn_waiter(
@@ -322,31 +475,114 @@ fn spawn_waiter(
 
 #[cfg(test)]
 mod tests {
-    use std::{path::PathBuf, thread, time::Duration};
+    #[cfg(unix)]
+    use std::path::PathBuf;
+    use std::{thread, time::Duration};
 
     use mux_core::{SessionId, SessionSpec};
 
-    use super::{TerminalBackend, TerminalEvent};
+    use super::{CursorInheritance, TerminalBackend, TerminalEvent, select_windows_shell};
 
     fn shell(command: &str) -> SessionSpec {
-        SessionSpec {
+        #[cfg(unix)]
+        let spec = SessionSpec {
             program: PathBuf::from("/bin/sh"),
             args: vec!["-c".into(), command.into()],
             cwd: None,
+        };
+        #[cfg(windows)]
+        let spec = SessionSpec {
+            program: super::default_shell()
+                .expect("PowerShell 7 must be installed for Windows tests"),
+            args: vec![
+                "-NoLogo".into(),
+                "-NoProfile".into(),
+                "-NonInteractive".into(),
+                "-Command".into(),
+                command.into(),
+            ],
+            cwd: None,
+        };
+        spec
+    }
+
+    #[test]
+    fn windows_shell_prefers_modern_install_and_requires_explicit_alternatives() {
+        use std::{
+            ffi::OsStr,
+            fs,
+            time::{SystemTime, UNIX_EPOCH},
+        };
+        let directory = std::env::temp_dir().join(format!(
+            "multiplexer-shell-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let installed = directory.join("ProgramFiles/PowerShell/7/pwsh.exe");
+        let path_dir = directory.join("bin");
+        fs::create_dir_all(installed.parent().unwrap()).unwrap();
+        fs::create_dir_all(&path_dir).unwrap();
+        let from_path = path_dir.join("pwsh.exe");
+        let alternative = path_dir.join("cmd.exe");
+        for path in [&installed, &from_path, &alternative] {
+            fs::write(path, "").unwrap();
         }
+        let program_files = directory.join("ProgramFiles");
+        let search_path = std::env::join_paths([&path_dir]).unwrap();
+        let select = |explicit| {
+            select_windows_shell(
+                explicit,
+                Some(program_files.as_os_str()),
+                Some(&search_path),
+            )
+        };
+        assert_eq!(select(None).unwrap(), installed);
+        assert_eq!(select(Some(OsStr::new("cmd"))).unwrap(), alternative);
+        assert_eq!(select(Some(alternative.as_os_str())).unwrap(), alternative);
+        assert_eq!(
+            select(Some(OsStr::new("missing.exe"))).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+        fs::remove_file(&installed).unwrap();
+        assert_eq!(select(None).unwrap(), from_path);
+        fs::remove_file(&from_path).unwrap();
+        let error = select(None).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        assert!(
+            error
+                .to_string()
+                .contains("winget install Microsoft.PowerShell")
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn conpty_cursor_inheritance_handles_fragments_and_answers_only_once() {
+        let mut query = CursorInheritance::default();
+        assert!(!query.push(b"output\x1b["));
+        assert!(!query.push(b"3m\x1b\x1b[6"));
+        assert!(query.push(b"nmore output"));
+        assert!(!query.push(b"\x1b[6n"));
     }
 
     #[test]
     fn drains_output_and_preserves_the_pty_identity_until_explicit_termination() {
         let id = SessionId(7);
         let mut backend = TerminalBackend::new(100);
+        #[cfg(unix)]
+        let command = "printf 'ready'; sleep 5";
+        #[cfg(windows)]
+        let command = "[Console]::Write('ready'); Start-Sleep -Seconds 5";
         backend
-            .spawn(id, &shell("printf 'ready'; sleep 5"), (80, 24))
+            .spawn(id, &shell(command), (80, 24))
             .expect("spawn shell in PTY");
         let pid = backend.process_id(id).expect("child pid");
 
         let mut saw_ready = false;
-        for _ in 0..50 {
+        for _ in 0..500 {
             for event in backend.drain_events(256) {
                 if matches!(event, TerminalEvent::Output { session, .. } if session == id) {
                     saw_ready = backend
@@ -363,6 +599,8 @@ mod tests {
         }
         assert!(saw_ready, "PTY output must be parsed while not rendered");
         assert_eq!(backend.process_id(id), Some(pid));
+        backend.resize(id, (100, 30)).expect("resize");
+        assert_eq!(backend.screen(id).unwrap().size(), (30, 100));
         backend.terminate(id).expect("terminate");
     }
 
@@ -370,17 +608,21 @@ mod tests {
     fn writes_exact_bytes_to_the_child() {
         let id = SessionId(8);
         let mut backend = TerminalBackend::new(100);
+        #[cfg(unix)]
+        let command = "IFS= read -r line; printf '<%s>' \"$line\"; sleep 1";
+        #[cfg(windows)]
+        let command = "[Console]::Write('<' + [Console]::ReadLine() + '>'); Start-Sleep -Seconds 1";
         backend
-            .spawn(
-                id,
-                &shell("IFS= read -r line; printf '<%s>' \"$line\"; sleep 1"),
-                (80, 24),
-            )
+            .spawn(id, &shell(command), (80, 24))
             .expect("spawn shell in PTY");
-        backend.write(id, b"alpha beta\n").expect("write");
+        #[cfg(unix)]
+        let input = b"alpha beta\n";
+        #[cfg(windows)]
+        let input = b"alpha beta\r";
+        backend.write(id, input).expect("write");
 
         let mut saw_echo = false;
-        for _ in 0..50 {
+        for _ in 0..500 {
             for _ in backend.drain_events(256) {
                 saw_echo = backend
                     .screen(id)
@@ -400,8 +642,12 @@ mod tests {
     fn reaped_child_is_never_signalled_again_while_scrollback_is_retained() {
         let id = SessionId(9);
         let mut backend = TerminalBackend::new(10);
-        backend.spawn(id, &shell("printf done"), (80, 24)).unwrap();
-        for _ in 0..50 {
+        #[cfg(unix)]
+        let command = "printf done";
+        #[cfg(windows)]
+        let command = "[Console]::Write('done')";
+        backend.spawn(id, &shell(command), (80, 24)).unwrap();
+        for _ in 0..500 {
             if !backend.terminals[&id]
                 .live
                 .load(std::sync::atomic::Ordering::Acquire)

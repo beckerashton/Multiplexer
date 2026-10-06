@@ -84,6 +84,8 @@ fn confirmed_quit_restores_controlling_terminal_and_leaves_alternate_screen() {
     let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_multiplexer"));
     command.cwd(&directory);
     command.env("SHELL", "/bin/sh");
+    command.env("XDG_STATE_HOME", directory.join("state"));
+    command.arg("--fresh");
     let mut child = pair.slave.spawn_command(command).unwrap();
     drop(pair.slave);
     let mut writer = pair.master.take_writer().unwrap();

@@ -6,6 +6,22 @@ Multiplexer v1 is a Linux-first, terminal-hosted Rust application. It runs in
 the user's existing terminal emulator and does not require a desktop window,
 server, or existing multiplexer session.
 
+Native Windows support uses the same Cargo workspace and dependency versions.
+`portable-pty` selects ConPTY on Windows 10 version 1809+; Crossterm console
+events are normalized into the shared input router, while Unix retains raw VT
+input. The Windows clipboard uses the built-in `powershell.exe` helper with
+UTF-8 input and `Set-Clipboard`; it is independent of the modern PowerShell 7
+(`pwsh.exe`) default pane shell. `MULTIPLEXER_SHELL` can choose a different
+executable. Layout state lives under `%LOCALAPPDATA%` with an absolute
+`%USERPROFILE%\AppData\Local` fallback; failed saves remain retryable. CI has separate native Linux and Windows
+jobs and executable artifacts. Windows runtime acceptance requires the native
+ConPTY smoke check and the manual checklist in `README.md`; cross compilation
+alone does not establish runtime compatibility.
+The opt-in native clipboard roundtrip check requires a disposable clipboard;
+the Windows CI job runs it explicitly on its hosted runner, while normal
+workspace tests preserve the user's clipboard. Windows Terminal key
+conflicts are documented in `docs/windows-terminal.md`.
+
 The dependency boundary is deliberately narrow:
 
 | Concern | Chosen component | Reason |
@@ -14,7 +30,7 @@ The dependency boundary is deliberately narrow:
 | VT parsing, screen state, scrollback | `vt100` 0.16.2 | Published parser designed for terminal-hosting applications such as screen/tmux. It exposes cells, alternate screen, cursor, application cursor/keypad, bracketed paste, and xterm mouse modes. |
 | Host terminal lifecycle | `crossterm` 0.29.0 | Provides raw mode, alternate screen, mouse/focus/paste control sequences, and restoration. |
 | Frame composition and incremental rendering | `ratatui` 0.28.1 with its Crossterm backend | Composes `vt100::Screen` cells and workspace chrome into a buffer, diffs successive frames, and emits only changed cells. |
-| Linux clipboard | configured helper (`wl-copy`, `xclip`, then `xsel`) | Matches terminal-hosted Linux practice without adding a GUI or clipboard-library dependency. |
+| Clipboard | Linux helpers (`wl-copy`, `xclip`, then `xsel`); Windows `powershell.exe` with `Set-Clipboard` | Uses platform helpers without adding a GUI or clipboard-library dependency. |
 | Configuration | `serde` + `toml` | Declarative configurable bindings with no embedded scripting runtime. |
 
 The app owns the layout tree, tab and stack state, command routing, broadcast
