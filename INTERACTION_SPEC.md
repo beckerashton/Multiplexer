@@ -218,7 +218,9 @@ to that buffer row. Ctrl-u/d moves half a page; Ctrl-b/f moves a full page.
 lines. Repeating the same visual key clears the selection; switching visual
 kinds preserves its anchor. Wide and combining characters remain intact.
 Character selections preserve soft wraps without inserting extra newlines;
-whole-line selections include a trailing newline.
+whole-line selections include a trailing newline. Before a copied line break,
+trailing whitespace is removed; indentation and blank lines are preserved.
+Line endings use LF on Linux and CRLF on Windows.
 
 `y` copies the selection (or current line without a visual selection) to the
 system clipboard and exits on success. Escape cancels. All other inputs,

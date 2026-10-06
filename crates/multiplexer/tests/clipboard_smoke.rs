@@ -225,7 +225,7 @@ fn selection_freezes_history_consumes_paste_and_copies_across_viewports() {
     let path = helper_environment(&directory.0);
     let capture = directory.0.join("clipboard-capture");
     let mut harness = Harness::start(&[("PATH", &path), ("WAYLAND_DISPLAY", "test-wayland")]);
-    harness.command("printf '\\033[2J\\033[H'; i=0; while [ $i -lt 80 ]; do printf 'ROW-%03d\\n' $i; i=$((i+1)); done; : > history-ready");
+    harness.command("printf '\\033[2J\\033[H'; i=0; while [ $i -lt 80 ]; do printf 'ROW-%03d   \\n' $i; i=$((i+1)); done; : > history-ready");
     harness.wait_for_file("history-ready", None);
     harness.wait_for_screen("last history row", |s| s.contents().contains("ROW-079"));
     harness.send(b"\x02yggV40j");

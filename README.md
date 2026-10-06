@@ -225,6 +225,9 @@ scrollback, starting at the application cursor. The live process keeps running.
 - `y`: copy the selection to the system clipboard and exit. With no selection,
   copy the current line. Escape cancels and restores live output.
 
+Whole-line yanks trim trailing whitespace from each line while preserving
+indentation and blank lines. Line endings use LF on Linux and CRLF on Windows.
+
 The status bar shows the mode and buffer position. Other keys, mouse reports,
 and pasted text are consumed while selecting; they never reach the application
 or broadcast targets. A terminal resize cancels selection.

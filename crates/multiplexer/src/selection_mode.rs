@@ -253,13 +253,17 @@ impl SelectionMode {
     }
 
     pub fn selected_text(&mut self) -> String {
+        self.selected_text_with_line_ending(if cfg!(windows) { "\r\n" } else { "\n" })
+    }
+
+    fn selected_text_with_line_ending(&mut self, line_ending: &str) -> String {
         let Some((start, end)) = self.range() else {
             return String::new();
         };
         let mut text = String::new();
         for row in start.row..=end.row {
             let local = self.inspect_row(row);
-            text.push_str(&selected_text(
+            let row_text = selected_text(
                 &self.screen,
                 &Selection {
                     session: self.session,
@@ -273,11 +277,14 @@ impl SelectionMode {
                         local,
                     ),
                 },
-            ));
+            );
             if (row < end.row && (self.linewise || !self.screen.row_wrapped(local)))
                 || (row == end.row && self.linewise)
             {
-                text.push('\n');
+                text.push_str(row_text.trim_end());
+                text.push_str(line_ending);
+            } else {
+                text.push_str(&row_text);
             }
         }
         self.reveal();
@@ -443,6 +450,32 @@ mod tests {
         assert_eq!(m.cursor(), (4, 0));
         keys(&mut m, b"wb");
         assert_eq!(m.cursor(), (0, 0));
+    }
+
+    #[test]
+    fn multiline_yanks_trim_trailing_whitespace_and_preserve_line_endings() {
+        for line_ending in ["\n", "\r\n"] {
+            let mut m = mode(b"  first  \r\n   \r\n  last  \x1b[1;1H", 4, 16);
+            keys(&mut m, b"V2j");
+            assert_eq!(
+                m.selected_text_with_line_ending(line_ending),
+                format!("  first{line_ending}{line_ending}  last{line_ending}")
+            );
+            // Character selections retain the spaces inside a soft-wrapped line.
+            let mut m = mode(b"abc def\x1b[1;1H", 3, 4);
+            keys(&mut m, b"vj$");
+            assert_eq!(m.selected_text_with_line_ending(line_ending), "abc def");
+            let mut m = mode(b"one   \r\n  two\x1b[1;1H", 3, 16);
+            keys(&mut m, b"vj$");
+            assert_eq!(
+                m.selected_text_with_line_ending(line_ending),
+                format!("one{line_ending}  two")
+            );
+        }
+        let mut m = mode(b"one   \x1b[1;1H", 2, 16);
+        assert_eq!(yank(&mut m, b"v5ly"), "one   ");
+        let mut m = mode(b"  one   \x1b[1;1H", 2, 16);
+        assert_eq!(yank(&mut m, b"y"), "  one\n");
     }
 
     #[test]
