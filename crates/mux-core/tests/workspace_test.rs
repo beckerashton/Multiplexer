@@ -151,6 +151,97 @@ fn same_tab_carry_is_noop_and_invalid_destination_is_rejected() {
 }
 
 #[test]
+fn local_and_global_splits_preserve_nested_layouts_and_sessions() {
+    for axis in [Axis::Horizontal, Axis::Vertical] {
+        for global in [false, true] {
+            let (mut workspace, _) = Workspace::new(shell("one"));
+            let bounds = CellRect {
+                x: 4,
+                y: 2,
+                cols: 120,
+                rows: 80,
+            };
+            workspace.set_bounds(bounds);
+            for axis in [Axis::Vertical, Axis::Horizontal] {
+                workspace
+                    .execute(WorkspaceCommand::SplitFocused {
+                        axis,
+                        session: shell("existing"),
+                    })
+                    .unwrap();
+            }
+            workspace
+                .execute(WorkspaceCommand::AddToFocusedStack {
+                    session: shell("stacked"),
+                })
+                .unwrap();
+            let before = workspace.view();
+            let old_tab = active_tab(&before);
+            let old_rects = old_tab.layout.geometry(bounds, before.minimum_pane_size);
+            let target = if global {
+                bounds
+            } else {
+                old_rects[&old_tab.focused_slot]
+            };
+            let (mut first, mut second) = (target, target);
+            match axis {
+                Axis::Horizontal => {
+                    first.rows /= 2;
+                    second.y += first.rows;
+                    second.rows -= first.rows;
+                }
+                Axis::Vertical => {
+                    first.cols /= 2;
+                    second.x += first.cols;
+                    second.cols -= first.cols;
+                }
+            }
+            let session = shell("new");
+            let command = if global {
+                WorkspaceCommand::SplitTab {
+                    axis,
+                    session: session.clone(),
+                }
+            } else {
+                WorkspaceCommand::SplitFocused {
+                    axis,
+                    session: session.clone(),
+                }
+            };
+            let transition = workspace.execute(command).unwrap();
+            let after = workspace.view();
+            let tab = active_tab(&after);
+            let rects = tab.layout.geometry(bounds, after.minimum_pane_size);
+            assert_eq!(rects[&tab.focused_slot], second);
+            let mut expected = if global {
+                old_tab.layout.geometry(first, before.minimum_pane_size)
+            } else {
+                old_rects
+            };
+            if !global {
+                expected.insert(old_tab.focused_slot, first);
+            }
+            for (slot, rect) in expected {
+                assert_eq!(rects[&slot], rect);
+                assert_eq!(tab.slots[&slot], old_tab.slots[&slot]);
+            }
+            assert_eq!(after.sessions.len(), before.sessions.len() + 1);
+            for (id, state) in before.sessions {
+                assert_eq!(after.sessions[&id], state);
+            }
+            assert_eq!(
+                transition.effects,
+                vec![LifecycleEffect::Spawn {
+                    session: tab.slots[&tab.focused_slot].stack.sessions[0],
+                    spec: session,
+                }]
+            );
+            assert!(transition.changed);
+        }
+    }
+}
+
+#[test]
 fn small_bounds_reject_split_and_carry_without_partially_changing_any_tab() {
     let (mut workspace, _) = Workspace::new(shell("default"));
     workspace.set_bounds(CellRect {
@@ -168,6 +259,16 @@ fn small_bounds_reject_split_and_carry_without_partially_changing_any_tab() {
         Err(DomainError::Layout(mux_core::LayoutError::MinimumSize))
     );
     assert_eq!(workspace.view(), before);
+    for axis in [Axis::Horizontal, Axis::Vertical] {
+        assert_eq!(
+            workspace.execute(WorkspaceCommand::SplitTab {
+                axis,
+                session: shell("rejected"),
+            }),
+            Err(DomainError::Layout(mux_core::LayoutError::MinimumSize))
+        );
+        assert_eq!(workspace.view(), before);
+    }
     workspace.set_bounds(CellRect {
         x: 0,
         y: 0,
@@ -337,19 +438,24 @@ fn carry_to_missing_tab_preserves_stack_without_spawning_a_shell() {
 
 #[test]
 fn natural_exit_empties_tab_and_split_can_repopulate_it() {
-    let (mut workspace, _) = Workspace::new(shell("default"));
-    workspace
-        .session_state_changed(SessionId(1), SessionState::Exited)
-        .unwrap();
-    assert!(active_tab(&workspace.view()).slots.is_empty());
-    let transition = workspace
-        .execute(WorkspaceCommand::SplitFocused {
-            axis: Axis::Vertical,
-            session: shell("replacement"),
-        })
-        .unwrap();
-    assert_eq!(transition.effects.len(), 1);
-    assert_eq!(active_tab(&workspace.view()).slots.len(), 1);
+    for axis in [Axis::Horizontal, Axis::Vertical] {
+        for global in [false, true] {
+            let (mut workspace, _) = Workspace::new(shell("default"));
+            workspace
+                .session_state_changed(SessionId(1), SessionState::Exited)
+                .unwrap();
+            assert!(active_tab(&workspace.view()).slots.is_empty());
+            let session = shell("replacement");
+            let command = if global {
+                WorkspaceCommand::SplitTab { axis, session }
+            } else {
+                WorkspaceCommand::SplitFocused { axis, session }
+            };
+            let transition = workspace.execute(command).unwrap();
+            assert_eq!(transition.effects.len(), 1);
+            assert_eq!(active_tab(&workspace.view()).slots.len(), 1);
+        }
+    }
 }
 
 #[test]

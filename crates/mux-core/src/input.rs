@@ -352,6 +352,14 @@ impl InputRouter {
                 axis: Axis::Horizontal,
                 session: context.default_session.clone(),
             },
+            BindingAction::SplitVerticalGlobal => WorkspaceCommand::SplitTab {
+                axis: Axis::Vertical,
+                session: context.default_session.clone(),
+            },
+            BindingAction::SplitHorizontalGlobal => WorkspaceCommand::SplitTab {
+                axis: Axis::Horizontal,
+                session: context.default_session.clone(),
+            },
             BindingAction::AddToStack => WorkspaceCommand::AddToFocusedStack {
                 session: context.default_session.clone(),
             },

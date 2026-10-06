@@ -61,7 +61,7 @@ terminal sessions.
 ### 1. Tiling, sizing, and focus
 
 - Create multiple panes in a tab.
-- Split the focused pane horizontally or vertically.
+- Split horizontally or vertically, either within the focused pane or across the whole tab.
 - Resize adjacent panes.
 - Navigate to neighboring panes in the four spatial directions.
 - Swap the focused pane slot with its neighboring pane in a chosen direction.

@@ -270,11 +270,20 @@ impl RuntimeConfig {
         add(
             "Manage Panes",
             singles(&[
-                (SplitHorizontal, "Split Horizontal"),
-                (SplitVertical, "Split Vertical"),
+                (SplitHorizontal, "Split Horizontal (Local)"),
+                (SplitVertical, "Split Vertical (Local)"),
             ]),
-            "-|",
-            "Split Horizontal / Vertical",
+            "-\\",
+            "Split Horizontal / Vertical (Local)",
+        );
+        add(
+            "Manage Panes",
+            singles(&[
+                (SplitHorizontalGlobal, "Split Horizontal (Global)"),
+                (SplitVerticalGlobal, "Split Vertical (Global)"),
+            ]),
+            "_|",
+            "Split Horizontal / Vertical (Global)",
         );
         add(
             "Manage Panes",
@@ -577,6 +586,8 @@ fn parse_action(name: &str) -> Result<BindingAction, String> {
     match normalized.as_str() {
         "split_vertical" => Ok(BindingAction::SplitVertical),
         "split_horizontal" => Ok(BindingAction::SplitHorizontal),
+        "split_vertical_global" => Ok(BindingAction::SplitVerticalGlobal),
+        "split_horizontal_global" => Ok(BindingAction::SplitHorizontalGlobal),
         "remove" | "remove_slot" => Ok(BindingAction::RemoveSlot),
         "kill" | "kill_session" => Ok(BindingAction::KillSession),
         "kill_stack" => Ok(BindingAction::KillStack),
@@ -662,6 +673,8 @@ fn action_name(action: BindingAction) -> String {
         BindingAction::Resize(direction) => format!("resize_{direction:?}").to_ascii_lowercase(),
         BindingAction::SplitVertical => "split_vertical".into(),
         BindingAction::SplitHorizontal => "split_horizontal".into(),
+        BindingAction::SplitVerticalGlobal => "split_vertical_global".into(),
+        BindingAction::SplitHorizontalGlobal => "split_horizontal_global".into(),
         BindingAction::AddToStack => "stack_add".into(),
         BindingAction::PreviousPane => "pane_previous".into(),
         BindingAction::NextPane => "pane_next".into(),
@@ -803,6 +816,40 @@ mod tests {
                 .iter()
                 .any(|(line, _)| line == "<alt> 9 ~ Switch / Create Tab 1")
         );
+    }
+
+    #[test]
+    fn local_and_global_split_bindings_can_be_customized() {
+        let config = RuntimeConfig::from_toml_str(
+            r#"
+[bindings]
+split_horizontal = "="
+split_vertical = "/"
+split_horizontal_global = "+"
+split_vertical_global = "?"
+"#,
+        )
+        .unwrap();
+        for (key, action) in [
+            (b'=', BindingAction::SplitHorizontal),
+            (b'/', BindingAction::SplitVertical),
+            (b'+', BindingAction::SplitHorizontalGlobal),
+            (b'?', BindingAction::SplitVerticalGlobal),
+        ] {
+            assert_eq!(config.bindings.binding(key), Some(action));
+        }
+        for key in b"-\\_|" {
+            assert_eq!(config.bindings.binding(*key), None);
+        }
+        let help = config.popup_help();
+        for expected in [
+            "<leader> = ~ Split Horizontal (Local)",
+            "<leader> / ~ Split Vertical (Local)",
+            "<leader> + ~ Split Horizontal (Global)",
+            "<leader> ? ~ Split Vertical (Global)",
+        ] {
+            assert!(help.iter().any(|(line, _)| line == expected), "{expected}");
+        }
     }
 
     #[test]

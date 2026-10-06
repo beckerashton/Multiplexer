@@ -74,6 +74,10 @@ pub enum WorkspaceCommand {
         axis: Axis,
         session: SessionSpec,
     },
+    SplitTab {
+        axis: Axis,
+        session: SessionSpec,
+    },
     AddToFocusedStack {
         session: SessionSpec,
     },

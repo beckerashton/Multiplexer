@@ -47,8 +47,10 @@ swap_up = "Ctrl-Alt-k"
 swap_right = "Ctrl-Alt-l"
 resize_mode = "r"
 broadcast_menu = "b"
-split_vertical = "|"
+split_vertical = "\\"
 split_horizontal = "-"
+split_vertical_global = "|"
+split_horizontal_global = "_"
 stack_add = "a"
 pane_previous = "Alt-["
 pane_next = "Alt-]"
@@ -150,6 +152,8 @@ wide and combining characters, stale-cell erasure, and cursor-only updates.
 - **Ctrl-b then Ctrl-Alt-h/j/k/l or 1…9:** swap or carry the whole stack,
   preserving its displayed member. A customized leader replaces Ctrl-b.
 - **Alt-1…9:** select the numbered tab; a missing tab starts one shell.
+- **Ctrl-b then `-` / `\`:** split the focused pane horizontally / vertically.
+- **Ctrl-b then `_` / `|`:** split the whole tab horizontally / vertically. The existing layout stays together above / left of the new focused pane.
 - **Ctrl-b then r:** enter resize mode. `hjkl` pushes the focused pane or stack’s left/bottom/top/right edge outward by one cell; `HJKL` uses five-cell steps. Alt-hjkl changes focus while staying in resize mode. Escape exits. Terminal edges and neighboring minimum sizes limit expansion.
 - **Ctrl-b then b:** open the broadcast submenu. `b` toggles visible-pane broadcast, `B` toggles manual broadcast, `m` toggles the focused pane’s manual target, and `r` resets broadcast. A command closes the submenu; Escape cancels. Unbound keys leave it open.
 - **Ctrl-b:** show the effective keybinding popup. Press a leader binding to
@@ -172,7 +176,7 @@ according to stack order. On short panes, edges are limited to preserve content.
 The expanded pane border also shows its stack position.
 Tab numbers are stable when other tabs disappear. When the last session exits
 or is killed, the active tab stays empty until you leave it, then is removed.
-Use leader `|`, `-`, or `a` to start a shell in an empty tab.
+Use any split binding or leader `a` to start a shell in an empty tab.
 
 Ctrl-Alt-number requires a terminal that can distinguish modified digits. The
 host requests Kitty keyboard disambiguation and accepts both

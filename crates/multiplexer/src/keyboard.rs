@@ -225,6 +225,8 @@ mod tests {
         assert!(decoder.push(b"\x1b[57442;2u").concat().is_empty());
         assert_eq!(decoder.push(b"\x1b[99;5:2u").concat(), vec![3]);
         assert_eq!(decoder.push(b"\x1b[49:33;2u").concat(), b"!");
+        assert_eq!(decoder.push(b"\x1b[45:95;2u").concat(), b"_");
+        assert_eq!(decoder.push(b"\x1b[92:124;2u").concat(), b"|");
     }
     #[test]
     fn lock_bits_and_combined_modifiers_become_shell_input() {

@@ -219,6 +219,33 @@ fn legacy_pane_jumps_and_horizontal_edges_cross_populated_tabs() {
 }
 
 #[test]
+fn local_splits_target_focused_pane_and_global_splits_span_the_tab() {
+    let mut app = Harness::new();
+    app.send(b"\x02\\");
+    app.top(" 1 ▫▪");
+    app.send(b"\x02-");
+    app.top(" 1 ▫▫▪");
+    app.wait("local split leaves the left pane full height", |s| {
+        s.cell(65, 119).unwrap().contents() == "╯" && s.cell(33, 120).unwrap().contents() == "╭"
+    });
+    app.send(b"\x02|");
+    app.top(" 1 ▫▫▫▪");
+    app.wait("global vertical split spans the tab height", |s| {
+        s.cell(1, 120).unwrap().contents() == "╭"
+            && s.cell(65, 120).unwrap().contents() == "╰"
+            && s.cell(33, 60).unwrap().contents() == "╭"
+    });
+    app.send(b"\x02_");
+    app.top(" 1 ▫▫▫▫▪");
+    app.wait("global horizontal split spans the tab width", |s| {
+        s.cell(33, 0).unwrap().contents() == "╭"
+            && s.cell(33, 239).unwrap().contents() == "╮"
+            && s.cell(65, 0).unwrap().contents() == "╰"
+            && s.cell(32, 120).unwrap().contents() == "╰"
+    });
+}
+
+#[test]
 fn resize_mode_and_broadcast_submenu_render_and_route_live_input() {
     let mut app = Harness::new();
     app.wait("initial shell", |s| s.contents().contains("todo-shell>"));

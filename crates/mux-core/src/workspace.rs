@@ -472,7 +472,8 @@ impl Workspace {
 
     pub fn execute(&mut self, command: WorkspaceCommand) -> Result<Transition, DomainError> {
         match command {
-            WorkspaceCommand::SplitFocused { axis, session } => self.split_focused(axis, session),
+            WorkspaceCommand::SplitFocused { axis, session } => self.split(axis, session, false),
+            WorkspaceCommand::SplitTab { axis, session } => self.split(axis, session, true),
             WorkspaceCommand::AddToFocusedStack { session } => self.add_to_focused_stack(session),
             WorkspaceCommand::Focus(direction) => self.focus(direction),
             WorkspaceCommand::CyclePane { delta } => self.cycle_pane(delta),
@@ -584,7 +585,12 @@ impl Workspace {
         }
     }
 
-    fn split_focused(&mut self, axis: Axis, spec: SessionSpec) -> Result<Transition, DomainError> {
+    fn split(
+        &mut self,
+        axis: Axis,
+        spec: SessionSpec,
+        global: bool,
+    ) -> Result<Transition, DomainError> {
         if self
             .active_tab_ref()
             .stacks
@@ -596,15 +602,18 @@ impl Workspace {
         let candidate = SlotId(self.next_slot);
         let focused = self.active_tab_ref().focused_slot;
         let mut proposed = self.active_tab_ref().layout.clone();
-        proposed.split(focused, axis, DEFAULT_SPLIT_RATIO, candidate)?;
+        if global {
+            proposed.split_tab(axis, DEFAULT_SPLIT_RATIO, candidate)?;
+        } else {
+            proposed.split(focused, axis, DEFAULT_SPLIT_RATIO, candidate)?;
+        }
         if !self.layout_fits(&proposed) {
             return Err(DomainError::Layout(LayoutError::MinimumSize));
         }
         let new_slot = self.allocate_slot();
         let new_session = self.allocate_session(spec.clone());
         let tab = self.active_tab_mut();
-        tab.layout
-            .split(tab.focused_slot, axis, DEFAULT_SPLIT_RATIO, new_slot)?;
+        tab.layout = proposed;
         tab.stacks
             .insert(new_slot, SlotStack::with_session(new_session));
         tab.focused_slot = new_slot;

@@ -52,7 +52,7 @@ fn leader_commands_are_consumed_and_literal_leader_is_forwarded() {
         router.route(InputEvent::Bytes(vec![0x02, b'|']), &context(), &config),
         vec![
             InputRoute::Consume,
-            InputRoute::Command(WorkspaceCommand::SplitFocused {
+            InputRoute::Command(WorkspaceCommand::SplitTab {
                 axis: Axis::Vertical,
                 session: context().default_session
             })
@@ -62,6 +62,29 @@ fn leader_commands_are_consumed_and_literal_leader_is_forwarded() {
         router.route(InputEvent::Bytes(vec![0x02, 0x02]), &context(), &config),
         vec![InputRoute::Consume, InputRoute::Forward(vec![0x02])]
     );
+}
+
+#[test]
+fn split_keys_route_local_and_global_commands_on_both_axes() {
+    let config = BindingConfig::default();
+    for (key, axis, global) in [
+        (b'-', Axis::Horizontal, false),
+        (b'\\', Axis::Vertical, false),
+        (b'_', Axis::Horizontal, true),
+        (b'|', Axis::Vertical, true),
+    ] {
+        let mut router = InputRouter::new();
+        let session = context().default_session;
+        let command = if global {
+            WorkspaceCommand::SplitTab { axis, session }
+        } else {
+            WorkspaceCommand::SplitFocused { axis, session }
+        };
+        assert_eq!(
+            router.route(InputEvent::Bytes(vec![0x02, key]), &context(), &config),
+            vec![InputRoute::Consume, InputRoute::Command(command)]
+        );
+    }
 }
 
 #[test]
@@ -86,7 +109,7 @@ fn leader_persists_until_command_or_escape() {
         router
             .route(InputEvent::Bytes(vec![b'|']), &context(), &config)
             .as_slice(),
-        [InputRoute::Command(WorkspaceCommand::SplitFocused { .. })]
+        [InputRoute::Command(WorkspaceCommand::SplitTab { .. })]
     ));
     assert!(!router.leader_pending());
     router.route(InputEvent::Bytes(vec![0x02, 0x1b]), &context(), &config);
@@ -177,7 +200,7 @@ fn all_bindings_emit_expected_command_shapes() {
         router.route(InputEvent::Bytes(vec![0x02, b'|']), &context(), &config),
         vec![
             InputRoute::Consume,
-            InputRoute::Command(WorkspaceCommand::SplitFocused {
+            InputRoute::Command(WorkspaceCommand::SplitTab {
                 axis: Axis::Vertical,
                 session: context().default_session
             })

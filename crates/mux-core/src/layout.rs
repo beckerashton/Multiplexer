@@ -111,6 +111,29 @@ impl LayoutTree {
         Ok(new_slot)
     }
 
+    /// Splits the whole tab, keeping its existing tree as the first child.
+    pub fn split_tab(
+        &mut self,
+        axis: Axis,
+        ratio: u16,
+        new_slot: SlotId,
+    ) -> Result<SlotId, LayoutError> {
+        if ratio == 0 || ratio >= Self::RATIO_SCALE {
+            return Err(LayoutError::InvalidRatio(ratio));
+        }
+        if self.contains(new_slot) {
+            return Err(LayoutError::UnknownSlot(new_slot));
+        }
+        let first = std::mem::replace(&mut self.root, Node::Leaf { slot: new_slot });
+        self.root = Node::Split {
+            axis,
+            ratio,
+            first: Box::new(first),
+            second: Box::new(Node::Leaf { slot: new_slot }),
+        };
+        Ok(new_slot)
+    }
+
     /// Inserts an already-existing slot next to `anchor`. This is used for
     /// carrying whole stacks between tabs, so it never changes session ids.
     pub fn insert_beside(

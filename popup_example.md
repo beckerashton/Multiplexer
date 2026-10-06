@@ -1,5 +1,6 @@
 Manage Panes
-<leader> -/| ~ Split Horizontal / Vertical
+<leader> -/\ ~ Split Horizontal / Vertical (Local)
+<leader> _/| ~ Split Horizontal / Vertical (Global)
 <leader> d ~ Remove Slot
 <alt> hjkl ~ Change Focus
 <alt> [/] ~ Previous / Next Pane
