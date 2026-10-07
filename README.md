@@ -140,10 +140,13 @@ wide and combining characters, stale-cell erasure, and cursor-only updates.
 ## Pane navigation and tabs
 
 - **Alt-h/j/k/l:** focus left/down/up/right. Up/down visits stack members first,
-  then spatial neighbors. At top/bottom edges, wraps to the opposite edge in
-  the same tab and column; a full-height stack cycles its own members.
+  then spatial neighbors in line with the cursor's row (left/right) or column
+  (up/down). At top/bottom edges, wraps to the opposite edge in the same tab
+  at the cursor's column; a full-height stack cycles its own members.
   Left/right at an outer edge wraps to the previous/next populated tab, skipping
-  empty tabs and retaining the destination's focused pane and stack member.
+  empty tabs and entering the opposite edge's pane in line with the cursor's
+  row. Its displayed stack member is retained. If cursor information is
+  unavailable, navigation uses pane overlap and center alignment.
 - **Alt-[ / Alt-]:** previous/next pane in layout order, skipping hidden members.
   At the ends, visits the previous/next populated tab; with only one populated
   tab, wraps within that tab. Entering a stack preserves its displayed member.

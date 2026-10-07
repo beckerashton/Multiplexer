@@ -182,12 +182,25 @@ impl LayoutTree {
     ) -> Option<SlotId> {
         let rects = self.geometry(bounds, min);
         let source = *rects.get(&slot)?;
+        self.neighbor_from(source, direction, bounds, min)
+    }
+
+    /// Find a neighbor along the supplied rectangle's boundary. A one-cell
+    /// row or column selects the pane in line with the cursor.
+    pub fn neighbor_from(
+        &self,
+        source: CellRect,
+        direction: Direction,
+        bounds: CellRect,
+        min: CellRect,
+    ) -> Option<SlotId> {
+        let rects = self.geometry(bounds, min);
         self.slots()
             .into_iter()
             .enumerate()
             .filter_map(|(order, candidate)| {
                 let rect = rects[&candidate];
-                (candidate != slot && touches_in_direction(source, rect, direction)).then_some((
+                touches_in_direction(source, rect, direction).then_some((
                     (
                         Reverse(shared_boundary(source, rect, direction)),
                         center_offset(source, rect, direction),
@@ -211,6 +224,19 @@ impl LayoutTree {
     ) -> Option<SlotId> {
         let rects = self.geometry(bounds, min);
         let source = *rects.get(&slot)?;
+        self.edge_neighbor(source, direction, bounds, min)
+    }
+
+    /// Enter the opposite edge, preferring overlap with the source pane, then
+    /// center alignment and layout traversal order.
+    pub fn edge_neighbor(
+        &self,
+        source: CellRect,
+        direction: Direction,
+        bounds: CellRect,
+        min: CellRect,
+    ) -> Option<SlotId> {
+        let rects = self.geometry(bounds, min);
         self.slots()
             .into_iter()
             .enumerate()
@@ -221,7 +247,10 @@ impl LayoutTree {
                         rect.y.saturating_add(rect.rows) == bounds.y.saturating_add(bounds.rows)
                     }
                     Direction::Down => rect.y == bounds.y,
-                    _ => false,
+                    Direction::Left => {
+                        rect.x.saturating_add(rect.cols) == bounds.x.saturating_add(bounds.cols)
+                    }
+                    Direction::Right => rect.x == bounds.x,
                 };
                 let shared = shared_boundary(source, rect, direction);
                 (edge && shared > 0).then_some((

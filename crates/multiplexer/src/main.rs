@@ -578,7 +578,12 @@ fn apply_command(
     status: &mut String,
     layout_store: &mut Option<LayoutStore>,
 ) {
-    match workspace.execute(command) {
+    let result = if let WorkspaceCommand::Focus(direction) = command {
+        workspace.focus_at(direction, focused_cursor(workspace, backend))
+    } else {
+        workspace.execute(command)
+    };
+    match result {
         Ok(transition) => apply_effects(
             backend,
             transition.effects,
@@ -589,6 +594,26 @@ fn apply_command(
         Err(error) => *status = error.to_string(),
     }
     save_changed_layout(layout_store, workspace, status);
+}
+
+fn focused_cursor(workspace: &Workspace, backend: &TerminalBackend) -> Option<(u16, u16)> {
+    let view = workspace.view();
+    let tab = view.tabs.iter().find(|tab| tab.id == view.active_tab)?;
+    let slot = tab.slots.get(&tab.focused_slot)?;
+    let session = *slot.stack.sessions.get(slot.stack.active?)?;
+    let (row, col) = backend.screen(session)?.cursor_position();
+    let rect = *tab
+        .layout
+        .geometry(view.bounds, view.minimum_pane_size)
+        .get(&slot.id)?;
+    let inner = pane_geometry::content(pane_geometry::stack_frame(rect, &slot.stack));
+    if inner.cols == 0 || inner.rows == 0 {
+        return None;
+    }
+    Some((
+        inner.x.saturating_add(col.min(inner.cols - 1)),
+        inner.y.saturating_add(row.min(inner.rows - 1)),
+    ))
 }
 
 fn save_changed_layout(

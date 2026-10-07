@@ -52,6 +52,7 @@ impl PtyHarness {
             .expect("open controlling PTY");
         let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_multiplexer"));
         command.cwd(&directory);
+        command.env("XDG_STATE_HOME", directory.join("state"));
         command.env("SHELL", "/bin/sh");
         for &(name, value) in env {
             command.env(name, value);

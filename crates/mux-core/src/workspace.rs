@@ -475,7 +475,7 @@ impl Workspace {
             WorkspaceCommand::SplitFocused { axis, session } => self.split(axis, session, false),
             WorkspaceCommand::SplitTab { axis, session } => self.split(axis, session, true),
             WorkspaceCommand::AddToFocusedStack { session } => self.add_to_focused_stack(session),
-            WorkspaceCommand::Focus(direction) => self.focus(direction),
+            WorkspaceCommand::Focus(direction) => self.focus_at(direction, None),
             WorkspaceCommand::CyclePane { delta } => self.cycle_pane(delta),
             WorkspaceCommand::Resize { direction, cells } => self.resize(direction, cells),
             WorkspaceCommand::Equalize(axis) => Ok(Transition {
@@ -644,41 +644,66 @@ impl Workspace {
         })
     }
 
-    fn focus(&mut self, direction: Direction) -> Result<Transition, DomainError> {
+    /// Move focus in line with a cursor in workspace cell coordinates. Without
+    /// a cursor, use the focused pane's overlap and center alignment.
+    pub fn focus_at(
+        &mut self,
+        direction: Direction,
+        cursor: Option<(u16, u16)>,
+    ) -> Result<Transition, DomainError> {
         let tab = self.active_tab_ref();
         let stack = &tab.stacks[&tab.focused_slot];
         let member = adjacent_stack_member(stack, direction);
         if let Some(index) = member {
             return self.select_stack_member(index);
         }
-        let next = tab.layout.neighbor(
-            tab.focused_slot,
-            direction,
-            self.bounds,
-            self.minimum_pane_size,
-        );
+        let mut source =
+            tab.layout.geometry(self.bounds, self.minimum_pane_size)[&tab.focused_slot];
+        if let Some((x, y)) = cursor {
+            match direction {
+                Direction::Left | Direction::Right => {
+                    source.y = y.clamp(
+                        source.y,
+                        source.y.saturating_add(source.rows.saturating_sub(1)),
+                    );
+                    source.rows = source.rows.min(1);
+                }
+                Direction::Up | Direction::Down => {
+                    source.x = x.clamp(
+                        source.x,
+                        source.x.saturating_add(source.cols.saturating_sub(1)),
+                    );
+                    source.cols = source.cols.min(1);
+                }
+            }
+        }
+        let next = tab
+            .layout
+            .neighbor_from(source, direction, self.bounds, self.minimum_pane_size);
         match next {
             Some(next) if next != tab.focused_slot => {
                 self.active_tab_mut().focused_slot = next;
                 Ok(Transition::changed())
             }
             _ => match direction {
-                Direction::Left => self.focus_populated_tab(-1),
-                Direction::Right => self.focus_populated_tab(1),
-                Direction::Up | Direction::Down => self.wrap_vertical_focus(direction),
+                Direction::Left => self.focus_populated_tab(-1, Some((direction, source))),
+                Direction::Right => self.focus_populated_tab(1, Some((direction, source))),
+                Direction::Up | Direction::Down => self.wrap_vertical_focus(direction, source),
             },
         }
     }
 
-    fn wrap_vertical_focus(&mut self, direction: Direction) -> Result<Transition, DomainError> {
+    fn wrap_vertical_focus(
+        &mut self,
+        direction: Direction,
+        source: CellRect,
+    ) -> Result<Transition, DomainError> {
         let tab = self.active_tab_ref();
         let focused = tab.focused_slot;
-        let Some(next) = tab.layout.vertical_wrap_neighbor(
-            focused,
-            direction,
-            self.bounds,
-            self.minimum_pane_size,
-        ) else {
+        let Some(next) =
+            tab.layout
+                .edge_neighbor(source, direction, self.bounds, self.minimum_pane_size)
+        else {
             return Ok(Transition::unchanged());
         };
         if next != focused {
@@ -706,7 +731,7 @@ impl Workspace {
         };
         let offset = index as isize + delta as isize;
         if offset < 0 || offset >= slots.len() as isize {
-            let transition = self.focus_populated_tab(delta.signum())?;
+            let transition = self.focus_populated_tab(delta.signum(), None)?;
             if transition.changed {
                 return Ok(transition);
             }
@@ -720,7 +745,11 @@ impl Workspace {
         Ok(Transition::changed())
     }
 
-    fn focus_populated_tab(&mut self, delta: i8) -> Result<Transition, DomainError> {
+    fn focus_populated_tab(
+        &mut self,
+        delta: i8,
+        entry: Option<(Direction, CellRect)>,
+    ) -> Result<Transition, DomainError> {
         let index = self.tab_index(self.active_tab).expect("active tab exists");
         let count = self.tabs.len();
         for step in 1..count {
@@ -728,9 +757,15 @@ impl Workspace {
                 .rem_euclid(count as isize) as usize;
             let tab = &self.tabs[candidate];
             if tab.stacks.values().any(|stack| !stack.is_empty()) {
-                // Reuse tab switching so selection is retained and broadcast
-                // scope is reset exactly as for numbered-tab navigation.
-                return self.select_tab(tab.id);
+                let next = entry.and_then(|(direction, source)| {
+                    tab.layout
+                        .edge_neighbor(source, direction, self.bounds, self.minimum_pane_size)
+                });
+                let transition = self.select_tab(tab.id)?;
+                if let Some(next) = next {
+                    self.active_tab_mut().focused_slot = next;
+                }
+                return Ok(transition);
             }
         }
         Ok(Transition::unchanged())

@@ -726,6 +726,218 @@ fn carrying_one_member_preserves_other_members_and_tab_selection() {
 }
 
 #[test]
+fn directional_focus_uses_the_cursor_at_t_junctions_and_vertical_wraps() {
+    for direction in [
+        Direction::Left,
+        Direction::Right,
+        Direction::Up,
+        Direction::Down,
+    ] {
+        let (mut workspace, _) = Workspace::new(shell("one"));
+        let (axis, perpendicular, reverse) = match direction {
+            Direction::Left => (Axis::Vertical, Axis::Horizontal, Direction::Right),
+            Direction::Right => (Axis::Vertical, Axis::Horizontal, Direction::Left),
+            Direction::Up => (Axis::Horizontal, Axis::Vertical, Direction::Down),
+            Direction::Down => (Axis::Horizontal, Axis::Vertical, Direction::Up),
+        };
+        let forward = matches!(direction, Direction::Right | Direction::Down);
+        let original = active_tab(&workspace.view()).focused_slot;
+        if forward {
+            workspace
+                .execute(WorkspaceCommand::SplitFocused {
+                    axis,
+                    session: shell("two"),
+                })
+                .unwrap();
+        }
+        let first = active_tab(&workspace.view()).focused_slot;
+        workspace
+            .execute(WorkspaceCommand::SplitFocused {
+                axis: perpendicular,
+                session: shell("three"),
+            })
+            .unwrap();
+        let second = active_tab(&workspace.view()).focused_slot;
+        if forward {
+            workspace.execute(WorkspaceCommand::Focus(reverse)).unwrap();
+            assert_eq!(active_tab(&workspace.view()).focused_slot, original);
+        } else {
+            workspace
+                .execute(WorkspaceCommand::SplitTab {
+                    axis,
+                    session: shell("source"),
+                })
+                .unwrap();
+        }
+        let view = workspace.view();
+        let tab = active_tab(&view);
+        let rects = tab.layout.geometry(view.bounds, view.minimum_pane_size);
+        let source = rects[&tab.focused_slot];
+        for expected in [first, second] {
+            let target = rects[&expected];
+            let cursor = if axis == Axis::Vertical {
+                (source.x + source.cols / 2, target.y + target.rows / 2)
+            } else {
+                (target.x + target.cols / 2, source.y + source.rows / 2)
+            };
+            let mut positioned = workspace.clone();
+            let transition = positioned.focus_at(direction, Some(cursor)).unwrap();
+            assert_eq!(active_tab(&positioned.view()).focused_slot, expected);
+            assert!(transition.effects.is_empty());
+            if axis == Axis::Horizontal {
+                let mut wrapped = workspace.clone();
+                wrapped.focus_at(reverse, Some(cursor)).unwrap();
+                assert_eq!(active_tab(&wrapped.view()).focused_slot, expected);
+            }
+        }
+    }
+}
+
+#[test]
+fn horizontal_tab_entry_tracks_cursor_row_even_from_a_full_height_pane() {
+    let (mut workspace, _) = Workspace::new(shell("source"));
+    let source = workspace.view().active_tab;
+    workspace
+        .execute(WorkspaceCommand::NavigateTab { number: 2 })
+        .unwrap();
+    let destination = workspace.view().active_tab;
+    let top = active_tab(&workspace.view()).focused_slot;
+    workspace
+        .execute(WorkspaceCommand::SplitFocused {
+            axis: Axis::Horizontal,
+            session: shell("bottom"),
+        })
+        .unwrap();
+    let bottom = active_tab(&workspace.view()).focused_slot;
+    let view = workspace.view();
+    let rects = active_tab(&view)
+        .layout
+        .geometry(view.bounds, view.minimum_pane_size);
+    workspace
+        .execute(WorkspaceCommand::SelectTab(source))
+        .unwrap();
+    for direction in [Direction::Left, Direction::Right] {
+        for expected in [top, bottom] {
+            let mut positioned = workspace.clone();
+            let rect = rects[&expected];
+            positioned
+                .focus_at(direction, Some((1, rect.y + rect.rows / 2)))
+                .unwrap();
+            let view = positioned.view();
+            assert_eq!(view.active_tab, destination);
+            assert_eq!(active_tab(&view).focused_slot, expected);
+        }
+    }
+}
+
+#[test]
+fn horizontal_tab_entry_chooses_the_aligned_edge_pane_instead_of_remembered_focus() {
+    for direction in [Direction::Left, Direction::Right] {
+        for bottom in [false, true] {
+            let (mut workspace, _) = Workspace::new(shell("source top"));
+            let source = workspace.view().active_tab;
+            workspace
+                .execute(WorkspaceCommand::SplitFocused {
+                    axis: Axis::Horizontal,
+                    session: shell("source bottom"),
+                })
+                .unwrap();
+            if !bottom {
+                workspace
+                    .execute(WorkspaceCommand::Focus(Direction::Up))
+                    .unwrap();
+            }
+
+            workspace
+                .execute(WorkspaceCommand::NavigateTab { number: 2 })
+                .unwrap();
+            let destination = workspace.view().active_tab;
+            let left_top = active_tab(&workspace.view()).focused_slot;
+            workspace
+                .execute(WorkspaceCommand::SplitFocused {
+                    axis: Axis::Vertical,
+                    session: shell("right top"),
+                })
+                .unwrap();
+            let right_top = active_tab(&workspace.view()).focused_slot;
+            workspace
+                .execute(WorkspaceCommand::SplitFocused {
+                    axis: Axis::Horizontal,
+                    session: shell("right bottom"),
+                })
+                .unwrap();
+            let right_bottom = active_tab(&workspace.view()).focused_slot;
+            workspace
+                .execute(WorkspaceCommand::Focus(Direction::Left))
+                .unwrap();
+            workspace
+                .execute(WorkspaceCommand::SplitFocused {
+                    axis: Axis::Horizontal,
+                    session: shell("left bottom"),
+                })
+                .unwrap();
+            let left_bottom = active_tab(&workspace.view()).focused_slot;
+            let slots = [left_top, left_bottom, right_top, right_bottom];
+            let expected_index =
+                if direction == Direction::Left { 2 } else { 0 } + usize::from(bottom);
+            let expected = slots[expected_index];
+            workspace
+                .execute(WorkspaceCommand::CyclePane {
+                    delta: expected_index as i8 - 1,
+                })
+                .unwrap();
+            workspace
+                .execute(WorkspaceCommand::AddToFocusedStack {
+                    session: shell("hidden"),
+                })
+                .unwrap();
+            workspace
+                .execute(WorkspaceCommand::SelectStackMember { index: 0 })
+                .unwrap();
+            let stack = active_tab(&workspace.view()).slots[&expected].stack.clone();
+            // Remember a pane on the wrong edge and at the wrong height.
+            let remembered_index = 3 - expected_index;
+            workspace
+                .execute(WorkspaceCommand::CyclePane {
+                    delta: remembered_index as i8 - expected_index as i8,
+                })
+                .unwrap();
+            workspace
+                .execute(WorkspaceCommand::SelectTab(source))
+                .unwrap();
+            workspace
+                .execute(WorkspaceCommand::NavigateTab { number: 2 })
+                .unwrap();
+            assert_eq!(
+                active_tab(&workspace.view()).focused_slot,
+                slots[remembered_index]
+            );
+            workspace
+                .execute(WorkspaceCommand::SelectTab(source))
+                .unwrap();
+            workspace
+                .execute(WorkspaceCommand::SetBroadcastScope(
+                    BroadcastScope::VisibleTab,
+                ))
+                .unwrap();
+            let sessions = workspace.view().sessions;
+
+            let transition = workspace
+                .execute(WorkspaceCommand::Focus(direction))
+                .unwrap();
+            let view = workspace.view();
+            assert!(transition.changed);
+            assert!(transition.effects.is_empty());
+            assert_eq!(view.active_tab, destination);
+            assert_eq!(active_tab(&view).focused_slot, expected);
+            assert_eq!(active_tab(&view).slots[&expected].stack, stack);
+            assert_eq!(view.broadcast_scope, BroadcastScope::Focused);
+            assert_eq!(view.sessions, sessions);
+        }
+    }
+}
+
+#[test]
 fn directional_edges_and_pane_jumps_wrap_populated_tabs_and_restore_selection() {
     let (mut workspace, _) = Workspace::new(shell("one"));
     let one = workspace.view().active_tab;

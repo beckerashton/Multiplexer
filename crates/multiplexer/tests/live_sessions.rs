@@ -62,6 +62,49 @@ impl Harness {
 }
 
 #[test]
+fn pane_navigation_uses_the_rendered_cursor_row_in_a_stack() {
+    let mut harness = Harness::start();
+    harness.command("printf ready > source-ready");
+    harness.wait_for_file("source-ready");
+    harness.send(&[0x02, b'\\']);
+    harness.command("PANE=top; printf ready > top-ready");
+    harness.wait_for_file("top-ready");
+    harness.send(&[0x02, b'-']);
+    harness.command("PANE=bottom; printf ready > bottom-ready");
+    harness.wait_for_file("bottom-ready");
+    harness.send(b"\x1bh\x02a");
+    harness.command("PANE=source; printf ready > stacked-ready");
+    harness.wait_for_file("stacked-ready");
+
+    // The right panes meet at workspace row 20. The expanded left member's
+    // content starts at row 3, after its collapsed member and top border.
+    for (row, expected) in [(17, "top"), (18, "bottom")] {
+        harness.command(&format!(
+            "PS1=; printf '\\033[{row};1H'; printf ready > cursor-{row}"
+        ));
+        harness.wait_for_file(&format!("cursor-{row}"));
+        let start = Instant::now();
+        loop {
+            let mut host = vt100::Parser::new(40, 120, 0);
+            host.process(&harness.output.lock().expect("capture lock"));
+            if host.screen().cursor_position() == (row + 2, 1) && !host.screen().hide_cursor() {
+                break;
+            }
+            assert!(
+                start.elapsed() < READY,
+                "positioned cursor was not rendered"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        harness.send(b"\x1bl");
+        harness.command(&format!("printf '%s' \"$PANE\" > selected-{row}"));
+        assert_eq!(harness.wait_for_file(&format!("selected-{row}")), expected);
+        harness.send(b"\x1bh");
+    }
+    harness.confirm_quit(READY);
+}
+
+#[test]
 fn live_processes_survive_stack_carry_and_broadcast_scope_is_exact() {
     let mut harness = Harness::start();
 
