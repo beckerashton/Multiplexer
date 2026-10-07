@@ -21,6 +21,58 @@ fn active_tab(view: &mux_core::WorkspaceView) -> &mux_core::TabView {
 }
 
 #[test]
+fn equalize_changes_only_the_active_layout_without_lifecycle_effects() {
+    let (mut workspace, _) = Workspace::new(shell("one"));
+    let initial = workspace
+        .execute(WorkspaceCommand::Equalize(Axis::Vertical))
+        .unwrap();
+    assert!(!initial.changed);
+    assert!(initial.effects.is_empty());
+    let source = workspace.view().active_tab;
+    workspace
+        .execute(WorkspaceCommand::CreateTab {
+            session: shell("other tab"),
+        })
+        .unwrap();
+    workspace
+        .execute(WorkspaceCommand::SelectTab(source))
+        .unwrap();
+    for name in ["two", "three"] {
+        workspace
+            .execute(WorkspaceCommand::SplitFocused {
+                axis: Axis::Vertical,
+                session: shell(name),
+            })
+            .unwrap();
+    }
+    workspace
+        .execute(WorkspaceCommand::AddToFocusedStack {
+            session: shell("stacked"),
+        })
+        .unwrap();
+    let mut before = workspace.view();
+    let transition = workspace
+        .execute(WorkspaceCommand::Equalize(Axis::Vertical))
+        .unwrap();
+    assert!(transition.changed);
+    assert!(transition.effects.is_empty());
+    let after = workspace.view();
+    before
+        .tabs
+        .iter_mut()
+        .find(|t| t.id == source)
+        .unwrap()
+        .layout = active_tab(&after).layout.clone();
+    assert_eq!(before, after);
+    assert!(
+        !workspace
+            .execute(WorkspaceCommand::Equalize(Axis::Vertical))
+            .unwrap()
+            .changed
+    );
+}
+
+#[test]
 fn carry_moves_the_full_stack_and_removes_a_sole_source_tab() {
     let (mut workspace, _) = Workspace::new(shell("default"));
     workspace

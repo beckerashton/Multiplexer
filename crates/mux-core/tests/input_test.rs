@@ -30,6 +30,46 @@ fn context() -> RouterContext {
 }
 
 #[test]
+fn equalize_bindings_route_each_axis_and_leave_plain_input_alone() {
+    let mut config = BindingConfig::default();
+    for (key, axis) in [(b'=', Axis::Vertical), (b'+', Axis::Horizontal)] {
+        let mut router = InputRouter::new();
+        assert_eq!(
+            router.route(InputEvent::Bytes(vec![key]), &context(), &config),
+            vec![InputRoute::Forward(vec![key])]
+        );
+        assert_eq!(
+            router.route(
+                InputEvent::Bytes(vec![config.leader(), key]),
+                &context(),
+                &config
+            ),
+            vec![
+                InputRoute::Consume,
+                InputRoute::Command(WorkspaceCommand::Equalize(axis))
+            ]
+        );
+        assert!(!router.leader_pending());
+    }
+    config
+        .rebind(b'e', BindingAction::Equalize(Axis::Vertical))
+        .unwrap();
+    let mut router = InputRouter::new();
+    assert_eq!(
+        router.route(
+            InputEvent::Bytes(vec![config.leader(), b'e']),
+            &context(),
+            &config
+        ),
+        vec![
+            InputRoute::Consume,
+            InputRoute::Command(WorkspaceCommand::Equalize(Axis::Vertical))
+        ]
+    );
+    assert_eq!(config.binding(b'='), None);
+}
+
+#[test]
 fn ordinary_bytes_are_forwarded_byte_for_byte() {
     let mut router = InputRouter::new();
     let config = BindingConfig::default();

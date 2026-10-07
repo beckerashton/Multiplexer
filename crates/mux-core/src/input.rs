@@ -344,6 +344,7 @@ impl InputRouter {
                 direction,
                 cells: 1,
             },
+            BindingAction::Equalize(axis) => WorkspaceCommand::Equalize(axis),
             BindingAction::SplitVertical => WorkspaceCommand::SplitFocused {
                 axis: Axis::Vertical,
                 session: context.default_session.clone(),

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::Direction;
+use crate::{Axis, Direction};
 
 /// A command token recognized after the configured leader.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -13,6 +13,7 @@ pub enum BindingAction {
     CarryMemberToTab(usize),
     Resize(Direction),
     ResizeMode,
+    Equalize(Axis),
     BroadcastMenu,
     SplitVertical,
     SplitHorizontal,
@@ -123,6 +124,8 @@ impl Default for BindingConfig {
 
         let defaults = [
             (b'r', BindingAction::ResizeMode),
+            (b'=', BindingAction::Equalize(Axis::Vertical)),
+            (b'+', BindingAction::Equalize(Axis::Horizontal)),
             (b'b', BindingAction::BroadcastMenu),
             (b'\\', BindingAction::SplitVertical),
             (b'-', BindingAction::SplitHorizontal),

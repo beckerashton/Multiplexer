@@ -7,6 +7,65 @@ const MIN: CellRect = CellRect {
     rows: 3,
 };
 
+#[test]
+fn equalize_balances_nested_panes_on_only_the_requested_axis() {
+    for (axis, perpendicular) in [
+        (Axis::Vertical, Axis::Horizontal),
+        (Axis::Horizontal, Axis::Vertical),
+    ] {
+        let mut tree = LayoutTree::new(SlotId(1));
+        assert!(!tree.equalize(axis));
+        tree.split(SlotId(1), axis, 800, SlotId(2)).unwrap();
+        tree.split(SlotId(2), axis, 200, SlotId(3)).unwrap();
+        tree.split(SlotId(1), perpendicular, 300, SlotId(4))
+            .unwrap();
+        let area = CellRect {
+            cols: 120,
+            rows: 120,
+            ..bounds()
+        };
+        let before = tree.geometry(area, MIN);
+        let slots = tree.slots();
+        assert!(tree.equalize(axis));
+        assert!(tree.is_valid());
+        assert_eq!(tree.slots(), slots);
+        let after = tree.geometry(area, MIN);
+        for (slot, rect) in &after {
+            match axis {
+                Axis::Vertical => {
+                    assert_eq!(rect.cols, 40);
+                    assert_eq!((rect.y, rect.rows), (before[slot].y, before[slot].rows));
+                }
+                Axis::Horizontal => {
+                    assert_eq!(rect.rows, 40);
+                    assert_eq!((rect.x, rect.cols), (before[slot].x, before[slot].cols));
+                }
+            }
+        }
+        assert!(!tree.equalize(axis));
+        let small = tree.geometry(
+            CellRect {
+                cols: 25,
+                rows: 10,
+                ..area
+            },
+            MIN,
+        );
+        assert!(
+            small
+                .values()
+                .all(|r| r.cols >= MIN.cols && r.rows >= MIN.rows)
+        );
+        assert_eq!(
+            small
+                .values()
+                .map(|r| r.cols as u32 * r.rows as u32)
+                .sum::<u32>(),
+            250
+        );
+    }
+}
+
 fn bounds() -> CellRect {
     CellRect {
         x: 4,

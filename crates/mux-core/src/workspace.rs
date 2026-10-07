@@ -478,6 +478,10 @@ impl Workspace {
             WorkspaceCommand::Focus(direction) => self.focus(direction),
             WorkspaceCommand::CyclePane { delta } => self.cycle_pane(delta),
             WorkspaceCommand::Resize { direction, cells } => self.resize(direction, cells),
+            WorkspaceCommand::Equalize(axis) => Ok(Transition {
+                effects: Vec::new(),
+                changed: self.active_tab_mut().layout.equalize(axis),
+            }),
             WorkspaceCommand::Swap(direction) => self.swap(direction),
             WorkspaceCommand::SwapMember(direction) => self.swap_member(direction),
             WorkspaceCommand::SelectStackMember { index } => self.select_stack_member(index),

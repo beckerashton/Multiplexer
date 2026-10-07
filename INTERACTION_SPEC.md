@@ -40,6 +40,7 @@ a recognized multiplexer command is being entered.
 | `Ctrl-Alt-h/j/k/l` | Move displayed member | Up/down reorders within the stack; at a spatial boundary, swaps displayed sessions with the neighbor and follows the moved session. |
 | `leader` then `Ctrl-Alt-h/j/k/l` | Swap whole stack | Swaps slots with the spatial neighbor, preserving stack order and active member. |
 | `leader r` | Enter persistent resize mode | `hjkl` pushes left/down/up/right by one cell; `HJKL` by five cells. Alt-hjkl retains focus navigation. Escape exits. Terminal edges and neighboring minimum sizes limit expansion. |
+| `leader =` / `leader +` | Equalize widths / heights | Balances the current tab's nested splits by pane spans along the selected axis; preserves ratios on the other axis, focus, stacks, and sessions. Minimum sizes and cell rounding apply. |
 | `leader \` | Split vertically (local) | Creates a left/right split at the focused slot, with the new terminal on the right. |
 | `leader -` | Split horizontally (local) | Creates a top/bottom split at the focused slot, with the new terminal below. |
 | `leader \|` | Split vertically (global) | Keeps the existing tab layout on the left and creates a full-height focused terminal on the right. |

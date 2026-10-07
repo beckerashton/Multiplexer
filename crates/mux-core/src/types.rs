@@ -90,6 +90,7 @@ pub enum WorkspaceCommand {
         direction: Direction,
         cells: i16,
     },
+    Equalize(Axis),
     Swap(Direction),
     SwapMember(Direction),
     CarryMemberToTab {

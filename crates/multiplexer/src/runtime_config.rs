@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, fs, path::Path};
 
-use mux_core::{BindingAction, BindingConfig, Direction};
+use mux_core::{Axis, BindingAction, BindingConfig, Direction};
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -323,6 +323,15 @@ impl RuntimeConfig {
         );
         add(
             "Manage Panes",
+            singles(&[
+                (Equalize(Axis::Vertical), "Equalize Widths"),
+                (Equalize(Axis::Horizontal), "Equalize Heights"),
+            ]),
+            "=+",
+            "Equalize Widths / Heights",
+        );
+        add(
+            "Manage Panes",
             directions(Resize, "Resize Pane"),
             "hjkl",
             "Resize Pane",
@@ -584,6 +593,8 @@ fn parse_action(name: &str) -> Result<BindingAction, String> {
         };
     }
     match normalized.as_str() {
+        "equalize_widths" => Ok(BindingAction::Equalize(Axis::Vertical)),
+        "equalize_heights" => Ok(BindingAction::Equalize(Axis::Horizontal)),
         "split_vertical" => Ok(BindingAction::SplitVertical),
         "split_horizontal" => Ok(BindingAction::SplitHorizontal),
         "split_vertical_global" => Ok(BindingAction::SplitVerticalGlobal),
@@ -669,6 +680,8 @@ fn action_name(action: BindingAction) -> String {
         BindingAction::CarryMemberToTab(number) => format!("carry_{number}"),
         BindingAction::Swap(direction) => format!("swap_stack_{direction:?}").to_ascii_lowercase(),
         BindingAction::ResizeMode => "resize_mode".into(),
+        BindingAction::Equalize(Axis::Vertical) => "equalize_widths".into(),
+        BindingAction::Equalize(Axis::Horizontal) => "equalize_heights".into(),
         BindingAction::BroadcastMenu => "broadcast_menu".into(),
         BindingAction::Resize(direction) => format!("resize_{direction:?}").to_ascii_lowercase(),
         BindingAction::SplitVertical => "split_vertical".into(),
@@ -827,6 +840,8 @@ split_horizontal = "="
 split_vertical = "/"
 split_horizontal_global = "+"
 split_vertical_global = "?"
+equalize_widths = "e"
+equalize_heights = "E"
 "#,
         )
         .unwrap();
@@ -850,6 +865,42 @@ split_vertical_global = "?"
         ] {
             assert!(help.iter().any(|(line, _)| line == expected), "{expected}");
         }
+    }
+
+    #[test]
+    fn equalize_bindings_and_help_use_effective_keys() {
+        let config = RuntimeConfig::from_toml_str(
+            "[bindings]\nequalize_widths = \"e\"\nequalize_heights = \"E\"",
+        )
+        .unwrap();
+        for (key, axis, name, label) in [
+            (b'e', Axis::Vertical, "equalize_widths", "Equalize Widths"),
+            (
+                b'E',
+                Axis::Horizontal,
+                "equalize_heights",
+                "Equalize Heights",
+            ),
+        ] {
+            assert_eq!(
+                config.bindings.binding(key),
+                Some(BindingAction::Equalize(axis))
+            );
+            assert!(
+                config
+                    .effective_help()
+                    .contains(&format!("leader {}: {name}", key as char))
+            );
+            assert!(
+                config
+                    .popup_help()
+                    .iter()
+                    .any(|(line, _)| line == &format!("<leader> {} ~ {label}", key as char))
+            );
+        }
+        assert_eq!(config.bindings.binding(b'='), None);
+        assert_eq!(config.bindings.binding(b'+'), None);
+        assert!(RuntimeConfig::from_toml_str("[bindings]\nequalize_widths = \"r\"").is_err());
     }
 
     #[test]

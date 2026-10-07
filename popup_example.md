@@ -7,6 +7,7 @@ Manage Panes
 <ctrl><alt> hjkl ~ Move Displayed Pane
 <leader> <ctrl><alt> hjkl ~ Swap Stacks
 <leader> r ~ Resize Mode
+<leader> =/+ ~ Equalize Widths / Heights
 <leader> x/X ~ Kill Session / Stack
 
 Manage Stacks

@@ -270,6 +270,13 @@ impl LayoutTree {
             .resize_boundary(slot, neighbor, axis, target_boundary, bounds, min)
     }
 
+    /// Balance widths (`Vertical`) or heights (`Horizontal`) throughout the
+    /// tree, preserving split ratios on the other axis. Geometry still clamps
+    /// to pane minimums and rounds to terminal cells.
+    pub fn equalize(&mut self, axis: Axis) -> bool {
+        self.root.equalize(axis).1
+    }
+
     pub fn swap_slots(&mut self, a: SlotId, b: SlotId) -> Result<(), LayoutError> {
         if !self.contains(a) {
             return Err(LayoutError::UnknownSlot(a));
@@ -286,6 +293,37 @@ impl LayoutTree {
 }
 
 impl Node {
+    /// Count panes sharing the requested span: add across its dividers, take
+    /// the maximum across perpendicular dividers so rows do not count as columns.
+    fn equalize(&mut self, axis: Axis) -> (u32, bool) {
+        match self {
+            Self::Leaf { .. } => (1, false),
+            Self::Split {
+                axis: split_axis,
+                ratio,
+                first,
+                second,
+            } => {
+                let (first_span, first_changed) = first.equalize(axis);
+                let (second_span, second_changed) = second.equalize(axis);
+                let mut changed = first_changed || second_changed;
+                let span = if *split_axis == axis {
+                    let total = first_span + second_span;
+                    let balanced = (first_span * LayoutTree::RATIO_SCALE as u32)
+                        .div_ceil(total)
+                        .clamp(1, (LayoutTree::RATIO_SCALE - 1) as u32)
+                        as u16;
+                    changed |= *ratio != balanced;
+                    *ratio = balanced;
+                    total
+                } else {
+                    first_span.max(second_span)
+                };
+                (span, changed)
+            }
+        }
+    }
+
     fn contains(&self, wanted: SlotId) -> bool {
         match self {
             Self::Leaf { slot } => *slot == wanted,

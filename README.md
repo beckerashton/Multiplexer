@@ -46,6 +46,8 @@ swap_down = "Ctrl-Alt-j"
 swap_up = "Ctrl-Alt-k"
 swap_right = "Ctrl-Alt-l"
 resize_mode = "r"
+equalize_widths = "="
+equalize_heights = "+"
 broadcast_menu = "b"
 split_vertical = "\\"
 split_horizontal = "-"
@@ -155,6 +157,7 @@ wide and combining characters, stale-cell erasure, and cursor-only updates.
 - **Ctrl-b then `-` / `\`:** split the focused pane horizontally / vertically.
 - **Ctrl-b then `_` / `|`:** split the whole tab horizontally / vertically. The existing layout stays together above / left of the new focused pane.
 - **Ctrl-b then r:** enter resize mode. `hjkl` pushes the focused pane or stack’s left/bottom/top/right edge outward by one cell; `HJKL` uses five-cell steps. Alt-hjkl changes focus while staying in resize mode. Escape exits. Terminal edges and neighboring minimum sizes limit expansion.
+- **Ctrl-b then `=` / `+`:** equalize pane widths / heights throughout the current tab. Nested splits share space by the number of panes along that axis; ratios on the other axis stay unchanged. Pane minimum sizes and cell rounding still apply. Rebind with `equalize_widths` / `equalize_heights`.
 - **Ctrl-b then b:** open the broadcast submenu. `b` toggles visible-pane broadcast, `B` toggles manual broadcast, `m` toggles the focused pane’s manual target, and `r` resets broadcast. A command closes the submenu; Escape cancels. Unbound keys leave it open.
 - **Ctrl-b:** show the effective keybinding popup. Press a leader binding to
   act, or Escape to dismiss. Related commands are grouped in two columns using
