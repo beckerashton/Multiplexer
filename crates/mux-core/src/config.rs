@@ -34,6 +34,9 @@ pub enum BindingAction {
     BroadcastManual,
     ToggleManualTarget,
     ResetBroadcast,
+    ToggleBorderless,
+    SetJumpMark,
+    JumpToMark,
     SelectionMode,
     Quit,
 }
@@ -150,6 +153,7 @@ impl Default for BindingConfig {
             (b'B', BindingAction::BroadcastManual),
             (b'm', BindingAction::ToggleManualTarget),
             (b'r', BindingAction::ResetBroadcast),
+            (b'z', BindingAction::ToggleBorderless),
             (b'y', BindingAction::SelectionMode),
             (b'q', BindingAction::Quit),
         ];
@@ -183,6 +187,8 @@ impl Default for BindingConfig {
                 BindingAction::CarryMemberToTab(number),
             );
         }
+        config.modified.insert((7, b'g'), BindingAction::SetJumpMark);
+        config.modified.insert((3, b'g'), BindingAction::JumpToMark);
         config
     }
 }

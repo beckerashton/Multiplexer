@@ -410,6 +410,9 @@ impl RuntimeConfig {
             "y",
             "Selection Mode",
         );
+        add("Other", singles(&[(ToggleBorderless, "Toggle Borderless")]), "z", "Toggle Borderless");
+        add("Other", singles(&[(SetJumpMark, "Mark Pane (then character)")]), "g", "Mark Pane (then character)");
+        add("Other", singles(&[(JumpToMark, "Jump to Pane (then character)")]), "g", "Jump to Pane (then character)");
         add("Other", singles(&[(Quit, "Quit")]), "q", "Quit");
 
         if config.alt_numbers_enabled() {
@@ -610,6 +613,9 @@ fn parse_action(name: &str) -> Result<BindingAction, String> {
         "broadcast_manual" => Ok(BindingAction::BroadcastManual),
         "broadcast_target" | "toggle_manual_target" => Ok(BindingAction::ToggleManualTarget),
         "broadcast_reset" | "reset_broadcast" => Ok(BindingAction::ResetBroadcast),
+        "toggle_borderless" => Ok(BindingAction::ToggleBorderless),
+        "set_jump_mark" => Ok(BindingAction::SetJumpMark),
+        "jump_to_mark" => Ok(BindingAction::JumpToMark),
         "selection_mode" | "copy" | "copy_selection" => Ok(BindingAction::SelectionMode),
         "quit" | "request_quit" => Ok(BindingAction::Quit),
         _ => Err("unknown command name".into()),
@@ -705,6 +711,9 @@ fn action_name(action: BindingAction) -> String {
         BindingAction::BroadcastManual => "broadcast_manual".into(),
         BindingAction::ToggleManualTarget => "broadcast_target".into(),
         BindingAction::ResetBroadcast => "broadcast_reset".into(),
+        BindingAction::ToggleBorderless => "toggle_borderless".into(),
+        BindingAction::SetJumpMark => "set_jump_mark".into(),
+        BindingAction::JumpToMark => "jump_to_mark".into(),
         BindingAction::SelectionMode => "selection_mode".into(),
         BindingAction::Quit => "quit".into(),
     }
@@ -716,23 +725,23 @@ mod tests {
 
     #[test]
     fn modal_bindings_have_separate_scopes_and_help_uses_custom_keys() {
-        assert!(RuntimeConfig::from_toml_str("[bindings]\nresize_mode = \"z\"").is_ok());
+        assert!(RuntimeConfig::from_toml_str("[bindings]\nresize_mode = \"f\"").is_ok());
         let config = RuntimeConfig::from_toml_str(
-            "[bindings]\nresize_mode = \"z\"\nbroadcast_menu = \"c\"\nbroadcast_reset = \"z\"",
+            "[bindings]\nresize_mode = \"f\"\nbroadcast_menu = \"c\"\nbroadcast_reset = \"f\"",
         )
         .unwrap();
         assert_eq!(
-            config.bindings.binding(b'z'),
+            config.bindings.binding(b'f'),
             Some(BindingAction::ResizeMode)
         );
         assert_eq!(
-            config.bindings.broadcast_bindings().get(&b'z'),
+            config.bindings.broadcast_bindings().get(&b'f'),
             Some(&BindingAction::ResetBroadcast)
         );
         assert!(
             config
                 .effective_help()
-                .contains("leader c z: broadcast_reset")
+                .contains("leader c f: broadcast_reset")
         );
         assert!(
             config
@@ -744,7 +753,7 @@ mod tests {
             config
                 .broadcast_help()
                 .iter()
-                .any(|(line, _)| line == "z ~ Reset Broadcast")
+                .any(|(line, _)| line == "f ~ Reset Broadcast")
         );
         assert!(
             !config
@@ -802,12 +811,12 @@ mod tests {
     #[test]
     fn popup_preserves_custom_directions_and_tab_settings() {
         let config = RuntimeConfig::from_toml_str(
-            "alt_numbers = false\n[bindings]\nfocus_left = \"z\"\nswap_left = \"Ctrl-Alt-u\"",
+            "alt_numbers = false\n[bindings]\nfocus_left = \"f\"\nswap_left = \"Ctrl-Alt-u\"",
         )
         .unwrap();
         let help = config.popup_help();
         for expected in [
-            "<leader> z ~ Change Focus Left",
+            "<leader> f ~ Change Focus Left",
             "<alt> j ~ Change Focus Down",
             "<ctrl><alt> u ~ Move Displayed Pane Left",
             "<leader> <ctrl><alt> u ~ Swap Stacks Left",
@@ -946,7 +955,7 @@ stack_add = "a"
         assert!(RuntimeConfig::from_toml_str("alt_tabs = [\"1\"]").is_err());
         assert!(RuntimeConfig::from_toml_str("leader = \"a\"").is_err());
         assert!(RuntimeConfig::from_toml_str("[bindings]\nfocus_left = \"Ctrl-b\"").is_err());
-        assert!(RuntimeConfig::from_toml_str("[bindings]\nstack_0 = \"z\"").is_err());
+        assert!(RuntimeConfig::from_toml_str("[bindings]\nstack_0 = \"f\"").is_err());
         assert!(RuntimeConfig::from_toml_str("leader_timeout_ms = 100").is_err());
     }
 
@@ -981,7 +990,7 @@ focus_right = "h"
 [bindings]
 focus_left = "Alt-l"
 focus_right = "Alt-h"
-carry_1 = "z"
+carry_1 = "f"
 "#,
         )
         .unwrap();
@@ -990,7 +999,7 @@ carry_1 = "z"
             Some(BindingAction::Focus(Direction::Left))
         );
         assert_eq!(
-            config.bindings.binding(b'z'),
+            config.bindings.binding(b'f'),
             Some(BindingAction::CarryMemberToTab(1))
         );
         assert_eq!(config.bindings.modified_binding(7, b'1'), None);
@@ -998,7 +1007,7 @@ carry_1 = "z"
             config
                 .binding_help()
                 .iter()
-                .any(|line| line == "leader z: carry_1")
+                .any(|line| line == "leader f: carry_1")
         );
         assert!(RuntimeConfig::from_toml_str("[bindings]\nfocus_left = \"Alt-l\"").is_err());
         assert!(RuntimeConfig::from_toml_str("[bindings]\nfocus_left = \"Alt-1\"").is_err());

@@ -36,6 +36,7 @@ pub enum InputRoute {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct InputRouter {
     leader_pending: bool,
+    jump_pending: Option<bool>,
     alt_pending: bool,
     carry_pending: bool,
     resize_mode: bool,
@@ -47,6 +48,10 @@ pub struct InputRouter {
 impl InputRouter {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn jump_pending(&self) -> Option<bool> {
+        self.jump_pending
     }
 
     pub fn resize_mode(&self) -> bool {
@@ -147,7 +152,7 @@ impl InputRouter {
                             }
                         });
                 }
-                return if self.leader_pending || self.modal() {
+                return if self.leader_pending || self.modal() || self.jump_pending.take().is_some() {
                     vec![InputRoute::Consume]
                 } else {
                     vec![InputRoute::Forward(bytes)]
@@ -186,11 +191,28 @@ impl InputRouter {
             if let Some(routes) = self.modified_key(key, modifiers, context, config) {
                 return routes;
             }
-            return if self.leader_pending || self.modal() {
+            return if self.leader_pending || self.modal() || self.jump_pending.take().is_some() {
                 vec![InputRoute::Consume]
             } else {
                 vec![InputRoute::Forward(vec![0x1b, byte])]
             };
+        }
+
+        if let Some(set) = self.jump_pending {
+            if byte == 0x1b {
+                self.alt_pending = true;
+                return Vec::new();
+            }
+            self.jump_pending = None;
+            return vec![if byte.is_ascii_graphic() || byte == b' ' {
+                InputRoute::Command(if set {
+                    WorkspaceCommand::SetJumpMark(byte)
+                } else {
+                    WorkspaceCommand::JumpToMark(byte)
+                })
+            } else {
+                InputRoute::Consume
+            }];
         }
 
         if self.modal() {
@@ -246,6 +268,17 @@ impl InputRouter {
         context: &RouterContext,
         config: &BindingConfig,
     ) -> Option<Vec<InputRoute>> {
+        if let Some(set) = self.jump_pending.take() {
+            return Some(vec![if modifiers == 1 && (key.is_ascii_graphic() || key == b' ') {
+                InputRoute::Command(if set {
+                    WorkspaceCommand::SetJumpMark(key)
+                } else {
+                    WorkspaceCommand::JumpToMark(key)
+                })
+            } else {
+                InputRoute::Consume
+            }]);
+        }
         if self.modal() {
             if modifiers == 1 && key == 0x1b {
                 self.resize_mode = false;
@@ -406,6 +439,11 @@ impl InputRouter {
                 WorkspaceCommand::ToggleManualBroadcastTarget(context.focused_slot)
             }
             BindingAction::ResetBroadcast => WorkspaceCommand::ResetBroadcast,
+            BindingAction::ToggleBorderless => WorkspaceCommand::ToggleBorderless,
+            BindingAction::SetJumpMark | BindingAction::JumpToMark => {
+                self.jump_pending = Some(action == BindingAction::SetJumpMark);
+                return vec![InputRoute::Consume];
+            }
             BindingAction::SelectionMode => WorkspaceCommand::SelectionMode,
             BindingAction::Quit => WorkspaceCommand::RequestQuit,
         };
@@ -413,6 +451,11 @@ impl InputRouter {
     }
 
     fn route_paste(&mut self, bytes: Vec<u8>) -> Vec<InputRoute> {
+        if self.jump_pending.take().is_some() {
+            self.alt_pending = false;
+            self.csi.clear();
+            return vec![InputRoute::Consume];
+        }
         if self.modal() {
             self.alt_pending = false;
             self.csi.clear();
@@ -447,7 +490,7 @@ impl InputRouter {
                     return routes;
                 }
             }
-            return if self.leader_pending || self.modal() {
+            return if self.leader_pending || self.modal() || self.jump_pending.take().is_some() {
                 vec![InputRoute::Consume]
             } else {
                 vec![InputRoute::Forward(bytes)]
@@ -455,7 +498,7 @@ impl InputRouter {
         }
         if self.alt_pending {
             self.alt_pending = false;
-            if self.leader_pending || self.modal() {
+            if self.leader_pending || self.modal() || self.jump_pending.take().is_some() {
                 self.leader_pending = false;
                 self.resize_mode = false;
                 self.broadcast_pending = false;

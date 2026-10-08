@@ -593,6 +593,9 @@ fn apply_command(
         ),
         Err(error) => *status = error.to_string(),
     }
+    if let Err(error) = sync_bounds(workspace) {
+        append_status(status, error.to_string());
+    }
     save_changed_layout(layout_store, workspace, status);
 }
 
@@ -606,7 +609,7 @@ fn focused_cursor(workspace: &Workspace, backend: &TerminalBackend) -> Option<(u
         .layout
         .geometry(view.bounds, view.minimum_pane_size)
         .get(&slot.id)?;
-    let inner = pane_geometry::content(pane_geometry::stack_frame(rect, &slot.stack));
+    let inner = pane_geometry::pane_content(rect, &slot.stack, tab.borderless);
     if inner.cols == 0 || inner.rows == 0 {
         return None;
     }
@@ -664,7 +667,7 @@ fn apply_effects(
 }
 fn sync_bounds(workspace: &mut Workspace) -> io::Result<()> {
     let (cols, rows) = terminal::size()?;
-    workspace.set_bounds(pane_geometry::workspace_bounds(cols, rows));
+    workspace.set_bounds(pane_geometry::workspace_bounds(cols, rows, workspace.borderless()));
     Ok(())
 }
 
@@ -689,7 +692,7 @@ fn scroll_mouse(
         let Some(slot) = tab.slots.get(&slot_id) else {
             continue;
         };
-        let inner = pane_geometry::content(pane_geometry::stack_frame(rect, &slot.stack));
+        let inner = pane_geometry::pane_content(rect, &slot.stack, tab.borderless);
         if !pane_geometry::contains(inner, event.x, event.y) {
             continue;
         }
@@ -743,7 +746,7 @@ fn forward_mouse(
     let Some(slot) = tab.slots.get(&tab.focused_slot) else {
         return;
     };
-    let rect = pane_geometry::content(pane_geometry::stack_frame(rect, &slot.stack));
+    let rect = pane_geometry::pane_content(rect, &slot.stack, tab.borderless);
     if !pane_geometry::contains(rect, event.x, event.y) {
         return;
     }

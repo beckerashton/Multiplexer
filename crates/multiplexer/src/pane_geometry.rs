@@ -1,6 +1,9 @@
 use mux_core::{CellRect, SlotStackView};
 
-pub fn workspace_bounds(cols: u16, rows: u16) -> CellRect {
+pub fn workspace_bounds(cols: u16, rows: u16, borderless: bool) -> CellRect {
+    if borderless {
+        return CellRect { x: 0, y: 0, cols, rows };
+    }
     CellRect {
         x: 0,
         y: rows.min(1),
@@ -23,6 +26,14 @@ pub fn stack_frame(rect: CellRect, stack: &SlotStackView) -> CellRect {
         y: rect.y.saturating_add(top as u16),
         rows: rect.rows.saturating_sub((top + bottom) as u16),
         ..rect
+    }
+}
+
+pub fn pane_content(rect: CellRect, stack: &SlotStackView, borderless: bool) -> CellRect {
+    if borderless {
+        rect
+    } else {
+        content(stack_frame(rect, stack))
     }
 }
 

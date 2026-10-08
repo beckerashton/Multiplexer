@@ -589,18 +589,46 @@ fn broadcast_submenu_waits_for_a_command_or_escape_without_forwarding() {
 #[test]
 fn modal_entry_and_broadcast_commands_support_separate_binding_scopes() {
     let mut config = BindingConfig::default();
-    config.rebind(b'z', BindingAction::ResizeMode).unwrap();
+    config.rebind(b'f', BindingAction::ResizeMode).unwrap();
     config.rebind(b'c', BindingAction::BroadcastMenu).unwrap();
-    config.rebind(b'z', BindingAction::ResetBroadcast).unwrap();
+    config.rebind(b'f', BindingAction::ResetBroadcast).unwrap();
     let mut router = InputRouter::new();
-    router.route(InputEvent::Bytes(b"\x02z".to_vec()), &context(), &config);
+    router.route(InputEvent::Bytes(b"\x02f".to_vec()), &context(), &config);
     assert!(router.resize_mode());
     router.route(InputEvent::Bytes(b"\x1b[27u".to_vec()), &context(), &config);
     assert!(!router.resize_mode());
-    let routes = router.route(InputEvent::Bytes(b"\x02cz".to_vec()), &context(), &config);
+    let routes = router.route(InputEvent::Bytes(b"\x02cf".to_vec()), &context(), &config);
     assert_eq!(
         routes.last(),
         Some(&InputRoute::Command(WorkspaceCommand::ResetBroadcast))
     );
     assert!(!router.broadcast_pending());
+}
+
+#[test]
+fn borderless_and_jump_prefixes_consume_keys_and_cancel_safely() {
+    let config = BindingConfig::default();
+    let mut router = InputRouter::new();
+    assert_eq!(router.route(InputEvent::Bytes(b"\x02z".to_vec()), &context(), &config),
+        vec![InputRoute::Consume, InputRoute::Command(WorkspaceCommand::ToggleBorderless)]);
+    for (prefix, set) in [(b"\x1b\x07".as_slice(), true), (b"\x1bg", false), (b"\x1b[103;7u", true), (b"\x1b[103;3u", false)] {
+        // Fragmented terminal reads must behave like a single key report.
+        for byte in prefix { router.route(InputEvent::Bytes(vec![*byte]), &context(), &config); }
+        assert_eq!(router.jump_pending(), Some(set));
+        router.route(InputEvent::Timeout, &context(), &config);
+        assert_eq!(router.jump_pending(), Some(set));
+        assert_eq!(router.route(InputEvent::Bytes(b"a".to_vec()), &context(), &config),
+            vec![InputRoute::Command(if set { WorkspaceCommand::SetJumpMark(b'a') } else { WorkspaceCommand::JumpToMark(b'a') })]);
+        assert_eq!(router.jump_pending(), None);
+    }
+    for cancel in [b"\x1b".as_slice(), b"\x1b[A", b"\x1bh", b"\x03"] {
+        router.route(InputEvent::Bytes(b"\x1bg".to_vec()), &context(), &config);
+        let routes = router.route(InputEvent::Bytes(cancel.to_vec()), &context(), &config);
+        assert!(!routes.iter().any(|r| matches!(r, InputRoute::Command(_) | InputRoute::Forward(_))));
+        router.route(InputEvent::Timeout, &context(), &config);
+        assert_eq!(router.jump_pending(), None);
+    }
+    router.route(InputEvent::Bytes(b"\x1b\x07".to_vec()), &context(), &config);
+    assert_eq!(router.route(InputEvent::Paste(b"abc".to_vec()), &context(), &config), vec![InputRoute::Consume]);
+    assert_eq!(router.jump_pending(), None);
 }

@@ -242,3 +242,17 @@ Copy tries `wl-copy` on Wayland, then `xclip` and `xsel` as fallbacks; X11
 uses `xclip` then `xsel`. On failure the selection stays open, the status bar
 shows the error, and `y` retries. The old `copy_selection` configuration name
 is accepted as an alias for `selection_mode`.
+
+### Borderless tabs and pane jump marks
+
+Press `leader z` (default: `Ctrl-b`, then `z`) to toggle borderless mode for the
+current tab. Panes use the full terminal without pane borders, the tab bar, or
+the bottom bar. The command popup and confirmation prompts still work. The
+setting is saved with the tab layout.
+
+Press `Ctrl-Alt-g`, then a plain character (for example `a`) to mark the focused
+pane. Press `Alt-g`, then that character to jump back, including across tabs or
+to a hidden stack member. Reusing a character replaces its mark. Marks follow
+pane members when moved and last for the current run; missing or closed targets
+do nothing. `Esc` cancels the pending character. Use printable ASCII characters
+(including digits) for marks.

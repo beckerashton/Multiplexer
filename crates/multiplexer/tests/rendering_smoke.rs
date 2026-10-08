@@ -40,6 +40,9 @@ fn fullscreen_mouse_typing_and_resize_use_incremental_output() {
             })
             .unwrap();
         let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_multiplexer"));
+        let state_dir = std::env::temp_dir().join(format!("mux-rendering-{}-{cols}", std::process::id()));
+        command.env("XDG_STATE_HOME", &state_dir);
+        command.arg("--fresh");
         command.env("SHELL", "/bin/sh");
         command.env("ENV", "/dev/null");
         command.env("PS1", "mux-test> ");
@@ -73,6 +76,25 @@ fn fullscreen_mouse_typing_and_resize_use_incremental_output() {
             settled_output(&rx).is_empty(),
             "idle terminal emitted output"
         );
+        writer.write_all(b"\x02z").unwrap();
+        writer.flush().unwrap();
+        host.process(&settled_output(&rx));
+        assert!(host.screen().contents().contains("mux-test>"));
+        assert!(!host.screen().contents().contains('╭'));
+        assert!(!host.screen().contents().contains("focused"));
+        writer.write_all(b"stty size\r").unwrap();
+        writer.flush().unwrap();
+        host.process(&settled_output(&rx));
+        assert!(host.screen().contents().contains(&format!("{rows} {cols}")), "{}", host.screen().contents());
+        writer.write_all(b"\x02").unwrap();
+        writer.flush().unwrap();
+        host.process(&settled_output(&rx));
+        assert!(host.screen().contents().contains("Key bindings"));
+        writer.write_all(b"z").unwrap();
+        writer.flush().unwrap();
+        host.process(&settled_output(&rx));
+        assert!(host.screen().contents().contains('╭'));
+        assert!(host.screen().contents().contains("focused"));
         for x in 10..30 {
             write!(writer, "\x1b[<35;{x};10M").unwrap();
         }
@@ -128,5 +150,6 @@ fn fullscreen_mouse_typing_and_resize_use_incremental_output() {
             assert!(start.elapsed() < Duration::from_secs(5), "quit failed");
             thread::sleep(Duration::from_millis(10));
         }
+        std::fs::remove_dir_all(state_dir).unwrap();
     }
 }

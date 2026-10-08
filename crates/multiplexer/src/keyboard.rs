@@ -231,6 +231,8 @@ mod tests {
     #[test]
     fn lock_bits_and_combined_modifiers_become_shell_input() {
         for (report, expected) in [
+            ("\x1b[103;7u", "\x1b\x07"), // Ctrl-Alt-G jump mark
+            ("\x1b[103;3u", "\x1bg"), // Alt-G jump
             ("\x1b[99;133u", "\x03"), // Ctrl-C with Num Lock
             ("\x1b[99;6u", "\x03"),   // Ctrl-Shift-C
             ("\x1b[97;4u", "\x1bA"),  // Alt-Shift-A

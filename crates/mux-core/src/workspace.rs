@@ -100,6 +100,7 @@ impl From<LayoutError> for DomainError {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Tab {
+    borderless: bool,
     id: TabId,
     number: usize,
     layout: LayoutTree,
@@ -116,6 +117,7 @@ pub struct SlotView {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TabView {
+    pub borderless: bool,
     pub id: TabId,
     pub number: usize,
     pub focused_slot: SlotId,
@@ -151,6 +153,8 @@ pub struct WorkspaceLayout {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SavedTabLayout {
+    #[serde(default)]
+    borderless: bool,
     number: usize,
     focused_slot: SlotId,
     layout: LayoutTree,
@@ -180,6 +184,7 @@ impl std::error::Error for LayoutRestoreError {}
 /// starts or terminates a process itself; callers apply returned effects.
 #[derive(Clone, Debug)]
 pub struct Workspace {
+    jump_marks: BTreeMap<u8, SessionId>,
     default_session: SessionSpec,
     next_tab: u64,
     next_slot: u64,
@@ -201,6 +206,7 @@ impl Workspace {
         let session_id = SessionId(1);
         let session = Session::new(session_id, default_session.clone());
         let tab = Tab {
+            borderless: false,
             id: tab_id,
             number: 1,
             layout: LayoutTree::new(slot_id),
@@ -210,6 +216,7 @@ impl Workspace {
         };
         (
             Self {
+                jump_marks: BTreeMap::new(),
                 default_session: default_session.clone(),
                 next_tab: 2,
                 next_slot: 2,
@@ -241,6 +248,7 @@ impl Workspace {
                 .tabs
                 .iter()
                 .map(|tab| SavedTabLayout {
+                    borderless: tab.borderless,
                     number: tab.number,
                     focused_slot: tab.focused_slot,
                     layout: tab.layout.clone(),
@@ -362,6 +370,7 @@ impl Workspace {
                     .map_err(|_| invalid("saved layout has too many tabs"))?,
             );
             tabs.push(Tab {
+                borderless: saved_tab.borderless,
                 id,
                 number: saved_tab.number,
                 layout: saved_tab.layout,
@@ -393,6 +402,7 @@ impl Workspace {
 
         Ok((
             Self {
+                jump_marks: BTreeMap::new(),
                 default_session,
                 next_tab,
                 next_slot,
@@ -410,6 +420,10 @@ impl Workspace {
                 changed: true,
             },
         ))
+    }
+
+    pub fn borderless(&self) -> bool {
+        self.active_tab_ref().borderless
     }
 
     pub fn set_bounds(&mut self, bounds: CellRect) {
@@ -540,6 +554,38 @@ impl Workspace {
                     Transition::unchanged()
                 })
             }
+            WorkspaceCommand::ToggleBorderless => {
+                let tab = self.active_tab_mut();
+                tab.borderless = !tab.borderless;
+                Ok(Transition::changed())
+            }
+            WorkspaceCommand::SetJumpMark(key) => {
+                let tab = self.active_tab_ref();
+                if let Some(session) = tab.stacks
+                    .get(&tab.focused_slot)
+                    .and_then(SlotStack::active_session)
+                {
+                    self.jump_marks.insert(key, session);
+                }
+                Ok(Transition::unchanged())
+            }
+            WorkspaceCommand::JumpToMark(key) => {
+                if let Some(session) = self.jump_marks.get(&key).copied() {
+                    for tab in &mut self.tabs {
+                        for (slot, stack) in &mut tab.stacks {
+                            if let Some(index) = stack.sessions().iter().position(|id| *id == session) {
+                                stack.select(index);
+                                tab.focused_slot = *slot;
+                                let destination = tab.id;
+                                self.select_tab(destination)?;
+                                return Ok(Transition::changed());
+                            }
+                        }
+                    }
+                    self.jump_marks.remove(&key);
+                }
+                Ok(Transition::unchanged())
+            }
             // Clipboard selection is terminal/UI state. The command is a
             // deliberate no-op in the pure workspace model.
             WorkspaceCommand::SelectionMode => Ok(Transition::unchanged()),
@@ -556,6 +602,7 @@ impl Workspace {
                 .tabs
                 .iter()
                 .map(|tab| TabView {
+                    borderless: tab.borderless,
                     id: tab.id,
                     number: tab.number,
                     focused_slot: tab.focused_slot,
@@ -876,6 +923,7 @@ impl Workspace {
         let id = self.allocate_tab();
         let slot = self.allocate_slot();
         self.tabs.push(Tab {
+            borderless: false,
             id,
             number,
             layout: LayoutTree::new(slot),

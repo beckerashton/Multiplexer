@@ -201,7 +201,7 @@ fn compose(
         .find(|tab| tab.id == view.active_tab)
         .expect("active tab");
     let (cols, rows) = (area.width, area.height);
-    let bounds = crate::pane_geometry::workspace_bounds(cols, rows);
+    let bounds = crate::pane_geometry::workspace_bounds(cols, rows, tab.borderless);
     let rects = tab.layout.geometry(bounds, view.minimum_pane_size);
 
     let mut cursor = None;
@@ -218,7 +218,7 @@ fn compose(
             continue;
         };
         let frame = crate::pane_geometry::stack_frame(rect, &slot.stack);
-        let inner = crate::pane_geometry::content(frame);
+        let inner = crate::pane_geometry::pane_content(rect, &slot.stack, tab.borderless);
         let width = inner.cols;
         let height = inner.rows;
         if width == 0 || height == 0 {
@@ -244,16 +244,18 @@ fn compose(
                 ""
             }
         );
-        paint_stack_edges(&mut buffer, rect, frame, &slot.stack);
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(if focused { theme::PURPLE } else { theme::MUTED }))
-            .title(header)
-            .render(
-                Rect::new(frame.x, frame.y, frame.cols, frame.rows),
-                &mut buffer,
-            );
+        if !tab.borderless {
+            paint_stack_edges(&mut buffer, rect, frame, &slot.stack);
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(if focused { theme::PURPLE } else { theme::MUTED }))
+                .title(header)
+                .render(
+                    Rect::new(frame.x, frame.y, frame.cols, frame.rows),
+                    &mut buffer,
+                );
+        }
         let mode = selection_mode.filter(|mode| mode.session == id);
         let mode_selection = mode.and_then(SelectionMode::visible_selection);
         if let Some(screen) = mode
@@ -303,7 +305,7 @@ fn compose(
     } else {
         String::new()
     };
-    if rows > 0 && cols > 0 {
+    if !tab.borderless && rows > 0 && cols > 0 {
         buffer.set_stringn(
             0,
             rows - 1,
@@ -327,7 +329,7 @@ fn compose(
             }),
         );
     }
-    if rows > 0 && cols > 0 {
+    if !tab.borderless && rows > 0 && cols > 0 {
         let mut x = 0;
         for (index, (label, active)) in tab_labels(&view).into_iter().enumerate() {
             if index > 0 {
@@ -392,6 +394,21 @@ fn compose(
         } else {
             leader_popup(&mut buffer, config);
         }
+        cursor = None;
+    }
+    if router.jump_pending().is_some() && !quit_pending && view.pending_confirmation.is_none() {
+        let title = if router.jump_pending() == Some(true) {
+            " Mark pane "
+        } else {
+            " Jump to pane "
+        };
+        bindings_popup(
+            &mut buffer, &[], title, "Press an unmodified character · Esc cancels",
+        );
+        cursor = None;
+    }
+    if tab.borderless && (quit_pending || view.pending_confirmation.is_some()) {
+        bindings_popup(&mut buffer, &[], " Confirm ", &prompt);
         cursor = None;
     }
     Scene { buffer, cursor }
@@ -528,6 +545,8 @@ fn bindings_popup(buffer: &mut Buffer, help: &[(String, bool)], title: &str, hin
         .unwrap_or(1)
         .saturating_mul(2)
         .saturating_add(5)
+        .max(hint.chars().count() + 2)
+        .max(title.chars().count() + 2)
         .min(u16::MAX as usize) as u16;
     let width = area.width.saturating_sub(4).max(4).min(desired_width);
     let column_width = width.saturating_sub(3) / 2;

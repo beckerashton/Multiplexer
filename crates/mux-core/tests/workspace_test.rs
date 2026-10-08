@@ -1091,3 +1091,35 @@ fn large_resize_steps_use_remaining_space_at_minimum_sizes() {
     assert_eq!(rect.x, view.minimum_pane_size.cols);
     assert_eq!(rect.cols, 22 - view.minimum_pane_size.cols);
 }
+
+#[test]
+fn borderless_is_per_tab_and_marks_follow_members_across_tabs() {
+    let (mut workspace, _) = Workspace::new(shell("one"));
+    workspace.execute(WorkspaceCommand::ToggleBorderless).unwrap();
+    assert!(workspace.borderless());
+    let (restored, _) = Workspace::restore_layout(workspace.layout_snapshot(), shell("restored")).unwrap();
+    assert!(restored.borderless());
+    workspace.execute(WorkspaceCommand::SetJumpMark(b'a')).unwrap();
+    workspace.execute(WorkspaceCommand::AddToFocusedStack { session: shell("two") }).unwrap();
+    workspace.execute(WorkspaceCommand::NavigateTab { number: 2 }).unwrap();
+    assert!(!workspace.borderless());
+    workspace.execute(WorkspaceCommand::JumpToMark(b'a')).unwrap();
+    assert!(workspace.borderless());
+    assert_eq!(active_tab(&workspace.view()).number, 1);
+    let view = workspace.view();
+    let tab = active_tab(&view);
+    assert_eq!(tab.slots[&tab.focused_slot].stack.active, Some(0));
+    workspace.execute(WorkspaceCommand::CarryMemberToTab { number: 2 }).unwrap();
+    workspace.execute(WorkspaceCommand::NavigateTab { number: 1 }).unwrap();
+    workspace.execute(WorkspaceCommand::JumpToMark(b'a')).unwrap();
+    assert_eq!(active_tab(&workspace.view()).number, 2);
+    assert!(!workspace.borderless());
+    workspace.execute(WorkspaceCommand::SetJumpMark(b'a')).unwrap();
+    workspace.execute(WorkspaceCommand::RequestKillFocusedSession).unwrap();
+    workspace.execute(WorkspaceCommand::ConfirmKillFocusedSession).unwrap();
+    assert!(!workspace.execute(WorkspaceCommand::JumpToMark(b'a')).unwrap().changed);
+    assert!(!workspace.execute(WorkspaceCommand::JumpToMark(b'?')).unwrap().changed);
+    workspace.execute(WorkspaceCommand::NavigateTab { number: 1 }).unwrap();
+    workspace.execute(WorkspaceCommand::ToggleBorderless).unwrap();
+    assert!(!workspace.borderless());
+}

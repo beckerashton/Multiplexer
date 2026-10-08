@@ -25,6 +25,9 @@ Broadcast
 
 Other
 <leader> y ~ Selection Mode
+<leader> z ~ Toggle Borderless
+<ctrl><alt> g ~ Mark Pane (then character)
+<alt> g ~ Jump to Pane (then character)
 <leader> q ~ Quit
 
 Maintenance: Put related command families in submenus as bindings expand. Keep similar functions and keybinds grouped as commands are added or changed. Display these groups in two columns, keeping each group together and wrapping entries within its column. Show effective configured bindings; only combine keys when the displayed shorthand remains accurate.
