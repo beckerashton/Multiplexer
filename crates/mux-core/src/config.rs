@@ -35,6 +35,7 @@ pub enum BindingAction {
     ToggleManualTarget,
     ResetBroadcast,
     ToggleBorderless,
+    ToggleBorderlessStackLines,
     SetJumpMark,
     JumpToMark,
     SelectionMode,
@@ -154,6 +155,7 @@ impl Default for BindingConfig {
             (b'm', BindingAction::ToggleManualTarget),
             (b'r', BindingAction::ResetBroadcast),
             (b'z', BindingAction::ToggleBorderless),
+            (b'Z', BindingAction::ToggleBorderlessStackLines),
             (b'y', BindingAction::SelectionMode),
             (b'q', BindingAction::Quit),
         ];

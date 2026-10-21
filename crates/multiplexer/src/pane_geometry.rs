@@ -8,17 +8,17 @@ pub fn workspace_bounds(cols: u16, rows: u16, borderless: bool) -> CellRect {
         x: 0,
         y: rows.min(1),
         cols,
-        rows: rows.saturating_sub(2),
+        rows: rows.saturating_sub(1),
     }
 }
 
 /// Leave one collapsed edge per hidden member, above/below the active member.
 /// On short terminals, share the available rows between both sides while
-/// preserving the expanded pane's borders and at least one content row.
-pub fn stack_frame(rect: CellRect, stack: &SlotStackView) -> CellRect {
+/// preserving at least one content row and any expanded pane borders.
+pub fn stack_frame(rect: CellRect, stack: &SlotStackView, borderless: bool) -> CellRect {
     let before = stack.active.unwrap_or(0).min(stack.sessions.len());
     let after = stack.sessions.len().saturating_sub(before + 1);
-    let budget = usize::from(rect.rows.saturating_sub(3));
+    let budget = usize::from(rect.rows.saturating_sub(if borderless { 1 } else { 3 }));
     let mut top = before.min(budget / 2);
     let bottom = after.min(budget - top);
     top = before.min(budget - bottom);
@@ -29,12 +29,14 @@ pub fn stack_frame(rect: CellRect, stack: &SlotStackView) -> CellRect {
     }
 }
 
-pub fn pane_content(rect: CellRect, stack: &SlotStackView, borderless: bool) -> CellRect {
-    if borderless {
-        rect
-    } else {
-        content(stack_frame(rect, stack))
+pub fn pane_content(
+    rect: CellRect, stack: &SlotStackView, borderless: bool, stack_lines: bool,
+) -> CellRect {
+    if borderless && !stack_lines {
+        return rect;
     }
+    let frame = stack_frame(rect, stack, borderless);
+    if borderless { frame } else { content(frame) }
 }
 
 pub fn content(rect: CellRect) -> CellRect {
@@ -73,7 +75,7 @@ mod tests {
                         sessions: (0..count).map(|id| SessionId(id as u64)).collect(),
                         active: Some(active),
                     };
-                    let frame = stack_frame(rect, &stack);
+                    let frame = stack_frame(rect, &stack, false);
                     let top = frame.y - rect.y;
                     let bottom = rect.y + rect.rows - frame.y - frame.rows;
                     assert!(usize::from(top) <= active);

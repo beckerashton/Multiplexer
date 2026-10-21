@@ -90,7 +90,7 @@ fn fullscreen_todo_interactions_and_extended_keyboard_work_together() {
     app.wait("shell and rounded border", |screen| {
         screen.contents().contains("todo-shell>")
             && screen.cell(1, 0).unwrap().contents() == "╭"
-            && screen.cell(65, 239).unwrap().contents() == "╯"
+            && screen.cell(66, 239).unwrap().contents() == "╯"
     });
 
     // A disambiguated Ctrl-b opens the same popup as the legacy leader byte.
@@ -160,30 +160,32 @@ fn stack_edges_follow_active_member_and_resize_terminal_content() {
         screen.contents().contains("todo-shell>")
     });
     app.send(b"\x02a");
-    app.wait("second member", |screen| screen.contents().contains("2/2"));
+    app.wait("second member", |screen| screen.cell(2, 0).unwrap().contents() == "╭"
+            && screen.cell(3, 0).unwrap().contents() == "│");
     app.send(b"\x02a");
     app.wait("two edges above third member", |screen| {
-        screen.cell(1, 2).unwrap().contents() == "1"
-            && screen.cell(2, 2).unwrap().contents() == "2"
-            && screen.contents().contains("3/3")
+        screen.cell(1, 2).unwrap().contents() == "─"
+            && screen.cell(2, 2).unwrap().contents() == "─"
+            && screen.cell(3, 0).unwrap().contents() == "╭"
+            && screen.cell(4, 0).unwrap().contents() == "│"
     });
     app.top(" 1 ▪");
     app.send(b"\x022");
     app.wait("edges above and below middle member", |screen| {
-        screen.cell(1, 2).unwrap().contents() == "1"
-            && screen.cell(65, 2).unwrap().contents() == "3"
-            && screen.contents().contains("2/3")
+        screen.cell(1, 2).unwrap().contents() == "─"
+            && screen.cell(66, 2).unwrap().contents() == "─"
+            && screen.cell(3, 0).unwrap().contents() == "│"
     });
     app.send(b"stty size\r");
     app.wait(
         "terminal content accounts for both collapsed edges",
-        |screen| screen.contents().contains("61 238"),
+        |screen| screen.contents().contains("62 238"),
     );
     app.send(b"\x021");
     app.wait("two edges below first member", |screen| {
-        screen.cell(64, 2).unwrap().contents() == "2"
-            && screen.cell(65, 2).unwrap().contents() == "3"
-            && screen.contents().contains("1/3")
+        screen.cell(65, 2).unwrap().contents() == "─"
+            && screen.cell(66, 2).unwrap().contents() == "─"
+            && screen.cell(2, 0).unwrap().contents() == "│"
     });
 }
 
@@ -193,18 +195,21 @@ fn legacy_pane_jumps_and_horizontal_edges_cross_populated_tabs() {
     app.top(" 1 ▪");
     app.send(b"\x02a");
     app.wait("stack member created", |screen| {
-        screen.contents().contains("2/2")
+        screen.cell(2, 0).unwrap().contents() == "╭"
+            && screen.cell(3, 0).unwrap().contents() == "│"
     });
     app.send(b"\x1bk");
     app.wait("Alt-k visits earlier member", |screen| {
-        screen.contents().contains("1/2")
+        screen.cell(2, 0).unwrap().contents() == "│"
+            && screen.cell(65, 0).unwrap().contents() == "╰"
     });
     app.send(b"\x02|");
     app.top(" 1 ▫▪");
     app.send(b"\x1b[");
     app.top(" 1 ▪▫");
     app.wait("jump preserves displayed member", |screen| {
-        screen.contents().contains("1/2")
+        screen.cell(2, 0).unwrap().contents() == "│"
+            && screen.cell(65, 0).unwrap().contents() == "╰"
     });
     app.send(b"\x1b]");
     app.top(" 1 ▫▪");
@@ -226,22 +231,22 @@ fn local_splits_target_focused_pane_and_global_splits_span_the_tab() {
     app.send(b"\x02-");
     app.top(" 1 ▫▫▪");
     app.wait("local split leaves the left pane full height", |s| {
-        s.cell(65, 119).unwrap().contents() == "╯" && s.cell(33, 120).unwrap().contents() == "╭"
+        s.cell(66, 119).unwrap().contents() == "╯" && s.cell(34, 120).unwrap().contents() == "╭"
     });
     app.send(b"\x02|");
     app.top(" 1 ▫▫▫▪");
     app.wait("global vertical split spans the tab height", |s| {
         s.cell(1, 120).unwrap().contents() == "╭"
-            && s.cell(65, 120).unwrap().contents() == "╰"
-            && s.cell(33, 60).unwrap().contents() == "╭"
+            && s.cell(66, 120).unwrap().contents() == "╰"
+            && s.cell(34, 60).unwrap().contents() == "╭"
     });
     app.send(b"\x02_");
     app.top(" 1 ▫▫▫▫▪");
     app.wait("global horizontal split spans the tab width", |s| {
-        s.cell(33, 0).unwrap().contents() == "╭"
-            && s.cell(33, 239).unwrap().contents() == "╮"
-            && s.cell(65, 0).unwrap().contents() == "╰"
-            && s.cell(32, 120).unwrap().contents() == "╰"
+        s.cell(34, 0).unwrap().contents() == "╭"
+            && s.cell(34, 239).unwrap().contents() == "╮"
+            && s.cell(66, 0).unwrap().contents() == "╰"
+            && s.cell(33, 120).unwrap().contents() == "╰"
     });
 }
 
@@ -252,7 +257,7 @@ fn resize_mode_and_broadcast_submenu_render_and_route_live_input() {
     app.send(b"\x02|");
     app.top(" 1 ▫▪");
     app.wait("split boundary", |s| {
-        s.cell(65, 120).unwrap().contents() == "╰"
+        s.cell(66, 120).unwrap().contents() == "╰"
     });
     app.send(b"\x02r");
     app.wait("resize popup", |s| {
@@ -262,18 +267,18 @@ fn resize_mode_and_broadcast_submenu_render_and_route_live_input() {
     });
     app.send(b"h");
     app.wait("one cell left", |s| {
-        s.cell(65, 119).unwrap().contents() == "╰"
+        s.cell(66, 119).unwrap().contents() == "╰"
     });
     // Extended Shift-h must match a legacy uppercase H.
     app.send(b"\x1b[104;2u");
     app.wait("five cells left", |s| {
-        s.cell(65, 114).unwrap().contents() == "╰"
+        s.cell(66, 114).unwrap().contents() == "╰"
     });
     app.send(b"\x1bh");
     app.top(" 1 ▪▫");
     app.send(b"l");
     app.wait("resize newly focused pane", |s| {
-        s.cell(65, 115).unwrap().contents() == "╰" && s.contents().contains("Resize mode")
+        s.cell(66, 115).unwrap().contents() == "╰" && s.contents().contains("Resize mode")
     });
     app.send(b"\x1b");
     app.wait("Escape ends resize mode", |s| {
@@ -297,7 +302,7 @@ fn resize_mode_and_broadcast_submenu_render_and_route_live_input() {
     });
     app.send(b"\x02bb");
     app.wait("visible broadcast enabled", |s| {
-        s.contents().contains("BROADCAST ALL") && !s.contents().contains("Toggle Visible Broadcast")
+        !s.contents().contains("Toggle Visible Broadcast") && !s.hide_cursor()
     });
     app.send(b"\x02br");
     app.wait("broadcast reset", |s| {

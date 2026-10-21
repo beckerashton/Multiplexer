@@ -201,7 +201,6 @@ fn run(
                 &mut backend,
                 &router,
                 &config,
-                &status,
                 quit_deadline.is_some(),
                 selection_mode.as_ref(),
             )?;
@@ -609,7 +608,7 @@ fn focused_cursor(workspace: &Workspace, backend: &TerminalBackend) -> Option<(u
         .layout
         .geometry(view.bounds, view.minimum_pane_size)
         .get(&slot.id)?;
-    let inner = pane_geometry::pane_content(rect, &slot.stack, tab.borderless);
+    let inner = pane_geometry::pane_content(rect, &slot.stack, tab.borderless, tab.stack_lines);
     if inner.cols == 0 || inner.rows == 0 {
         return None;
     }
@@ -692,7 +691,7 @@ fn scroll_mouse(
         let Some(slot) = tab.slots.get(&slot_id) else {
             continue;
         };
-        let inner = pane_geometry::pane_content(rect, &slot.stack, tab.borderless);
+        let inner = pane_geometry::pane_content(rect, &slot.stack, tab.borderless, tab.stack_lines);
         if !pane_geometry::contains(inner, event.x, event.y) {
             continue;
         }
@@ -746,7 +745,7 @@ fn forward_mouse(
     let Some(slot) = tab.slots.get(&tab.focused_slot) else {
         return;
     };
-    let rect = pane_geometry::pane_content(rect, &slot.stack, tab.borderless);
+    let rect = pane_geometry::pane_content(rect, &slot.stack, tab.borderless, tab.stack_lines);
     if !pane_geometry::contains(rect, event.x, event.y) {
         return;
     }

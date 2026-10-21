@@ -174,12 +174,14 @@ blue-gray inactive borders, and pink broadcast/red confirmation indicators.
 Terminal default text follows the theme, while the background uses the host
 terminal's default. Explicit application ANSI and RGB colors are preserved.
 
+There is no bottom status bar; panes extend to the last terminal row. Status hints are hidden;
+confirmations use a popup.
 Each pane has a rounded border. The top row shows stable tab numbers followed
 by one square per pane in layout order, for example `1 ▫▫▫▫ │ 2 ▪▫`.
 The filled square marks the focused pane in the active tab; `∅` marks an empty
-tab. Stacks show numbered collapsed edges above and below the expanded member
+tab. Stacks show unnumbered collapsed edges above and below the expanded member
 according to stack order. On short panes, edges are limited to preserve content.
-The expanded pane border also shows its stack position.
+Pane borders and stack lines have no numeric labels.
 Tab numbers are stable when other tabs disappear. When the last session exits
 or is killed, the active tab stays empty until you leave it, then is removed.
 Use any split binding or leader `a` to start a shell in an empty tab.
@@ -234,21 +236,22 @@ scrollback, starting at the application cursor. The live process keeps running.
 Whole-line yanks trim trailing whitespace from each line while preserving
 indentation and blank lines. Line endings use LF on Linux and CRLF on Windows.
 
-The status bar shows the mode and buffer position. Other keys, mouse reports,
+Other keys, mouse reports,
 and pasted text are consumed while selecting; they never reach the application
 or broadcast targets. A terminal resize cancels selection.
 
 Copy tries `wl-copy` on Wayland, then `xclip` and `xsel` as fallbacks; X11
-uses `xclip` then `xsel`. On failure the selection stays open, the status bar
-shows the error, and `y` retries. The old `copy_selection` configuration name
+uses `xclip` then `xsel`. On failure the selection stays open and `y` retries. The old `copy_selection` configuration name
 is accepted as an alias for `selection_mode`.
 
 ### Borderless tabs and pane jump marks
 
 Press `leader z` (default: `Ctrl-b`, then `z`) to toggle borderless mode for the
-current tab. Panes use the full terminal without pane borders, the tab bar, or
-the bottom bar. The command popup and confirmation prompts still work. The
-setting is saved with the tab layout.
+current tab. Panes use the full terminal without pane borders or the tab bar. The command popup and confirmation prompts still work. The
+setting is saved with the tab layout. `leader Z` toggles a variant that keeps one
+line per hidden stack member, without a border around the active pane. Switching
+between `z` and `Z` selects that variant; repeating the same binding restores the
+normal layout.
 
 Press `Ctrl-Alt-g`, then a plain character (for example `a`) to mark the focused
 pane. Press `Alt-g`, then that character to jump back, including across tabs or

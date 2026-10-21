@@ -94,7 +94,7 @@ fn fullscreen_mouse_typing_and_resize_use_incremental_output() {
         writer.flush().unwrap();
         host.process(&settled_output(&rx));
         assert!(host.screen().contents().contains('╭'));
-        assert!(host.screen().contents().contains("focused"));
+        assert!(!host.screen().contents().contains("focused"));
         for x in 10..30 {
             write!(writer, "\x1b[<35;{x};10M").unwrap();
         }
@@ -134,14 +134,47 @@ fn fullscreen_mouse_typing_and_resize_use_incremental_output() {
         assert!(!resized.is_empty(), "resize was not rendered");
         host.process(&resized);
         assert!(host.screen().contents().contains("mux-test> a"));
-        let status: String = (0..new_cols)
+        let bottom: String = (0..new_cols)
             .filter_map(|col| host.screen().cell(new_rows - 1, col))
             .map(|cell| cell.contents())
             .collect();
         assert!(
-            status.starts_with("tab 1"),
-            "status row did not follow resize"
+            bottom.starts_with("╰─") && bottom.ends_with("─╯"),
+            "pane border did not occupy the last row"
         );
+
+        // Stack-line borderless mode reserves exactly one row per hidden member.
+        writer.write_all(b"\x02a\x02a\x022\x02Z").unwrap();
+        writer.flush().unwrap();
+        host.process(&settled_output(&rx));
+        assert_eq!(host.screen().cell(0, 0).unwrap().contents(), "┌");
+        assert_eq!(host.screen().cell(0, new_cols - 1).unwrap().contents(), "┐");
+        assert_eq!(host.screen().cell(new_rows - 1, 0).unwrap().contents(), "└");
+        assert_eq!(host.screen().cell(new_rows - 1, new_cols - 1).unwrap().contents(), "┘");
+        assert_eq!(host.screen().cell(0, 2).unwrap().contents(), "─");
+        assert_eq!(host.screen().cell(new_rows - 1, 2).unwrap().contents(), "─");
+        assert!(!host.screen().contents().contains('│'));
+        assert!(!host.screen().contents().contains("focused"));
+        assert!(!host.screen().contents().contains("2/3"));
+        writer.write_all(b"stty size\r").unwrap();
+        writer.flush().unwrap();
+        host.process(&settled_output(&rx));
+        assert!(host.screen().contents().contains(&format!("{} {new_cols}", new_rows - 2)));
+        writer.write_all(b"\x02").unwrap();
+        writer.flush().unwrap();
+        host.process(&settled_output(&rx));
+        assert!(host.screen().contents().contains("Key bindings"));
+        writer.write_all(b"Z").unwrap();
+        writer.flush().unwrap();
+        host.process(&settled_output(&rx));
+        assert_eq!(host.screen().cell(2, 2).unwrap().contents(), "─");
+        assert!(!host.screen().contents().contains("2/3"));
+        assert!(!host.screen().contents().contains("focused"));
+        writer.write_all(b"\x02Z\x02z").unwrap();
+        writer.flush().unwrap();
+        host.process(&settled_output(&rx));
+        assert!(!host.screen().contents().contains('─'));
+        assert!(!host.screen().contents().contains("focused"));
 
         writer.write_all(b"\x02qy").unwrap();
         writer.flush().unwrap();

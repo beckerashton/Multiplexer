@@ -101,6 +101,7 @@ impl From<LayoutError> for DomainError {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Tab {
     borderless: bool,
+    stack_lines: bool,
     id: TabId,
     number: usize,
     layout: LayoutTree,
@@ -118,6 +119,7 @@ pub struct SlotView {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TabView {
     pub borderless: bool,
+    pub stack_lines: bool,
     pub id: TabId,
     pub number: usize,
     pub focused_slot: SlotId,
@@ -155,6 +157,8 @@ pub struct WorkspaceLayout {
 struct SavedTabLayout {
     #[serde(default)]
     borderless: bool,
+    #[serde(default)]
+    stack_lines: bool,
     number: usize,
     focused_slot: SlotId,
     layout: LayoutTree,
@@ -207,6 +211,7 @@ impl Workspace {
         let session = Session::new(session_id, default_session.clone());
         let tab = Tab {
             borderless: false,
+            stack_lines: false,
             id: tab_id,
             number: 1,
             layout: LayoutTree::new(slot_id),
@@ -249,6 +254,7 @@ impl Workspace {
                 .iter()
                 .map(|tab| SavedTabLayout {
                     borderless: tab.borderless,
+                    stack_lines: tab.stack_lines,
                     number: tab.number,
                     focused_slot: tab.focused_slot,
                     layout: tab.layout.clone(),
@@ -371,6 +377,7 @@ impl Workspace {
             );
             tabs.push(Tab {
                 borderless: saved_tab.borderless,
+                stack_lines: saved_tab.stack_lines,
                 id,
                 number: saved_tab.number,
                 layout: saved_tab.layout,
@@ -554,9 +561,11 @@ impl Workspace {
                     Transition::unchanged()
                 })
             }
-            WorkspaceCommand::ToggleBorderless => {
+            WorkspaceCommand::ToggleBorderless | WorkspaceCommand::ToggleBorderlessStackLines => {
+                let stack_lines = matches!(command, WorkspaceCommand::ToggleBorderlessStackLines);
                 let tab = self.active_tab_mut();
-                tab.borderless = !tab.borderless;
+                tab.borderless = !tab.borderless || tab.stack_lines != stack_lines;
+                tab.stack_lines = tab.borderless && stack_lines;
                 Ok(Transition::changed())
             }
             WorkspaceCommand::SetJumpMark(key) => {
@@ -603,6 +612,7 @@ impl Workspace {
                 .iter()
                 .map(|tab| TabView {
                     borderless: tab.borderless,
+                    stack_lines: tab.stack_lines,
                     id: tab.id,
                     number: tab.number,
                     focused_slot: tab.focused_slot,
@@ -924,6 +934,7 @@ impl Workspace {
         let slot = self.allocate_slot();
         self.tabs.push(Tab {
             borderless: false,
+            stack_lines: false,
             id,
             number,
             layout: LayoutTree::new(slot),

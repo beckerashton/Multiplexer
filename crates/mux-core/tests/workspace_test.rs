@@ -1123,3 +1123,28 @@ fn borderless_is_per_tab_and_marks_follow_members_across_tabs() {
     workspace.execute(WorkspaceCommand::ToggleBorderless).unwrap();
     assert!(!workspace.borderless());
 }
+
+#[test]
+fn stack_line_borderless_mode_toggles_switches_and_restores_per_tab() {
+    let (mut workspace, _) = Workspace::new(shell("one"));
+    for command in [
+        WorkspaceCommand::ToggleBorderlessStackLines,
+        WorkspaceCommand::ToggleBorderless,
+        WorkspaceCommand::ToggleBorderlessStackLines,
+    ] {
+        let stack_lines = command == WorkspaceCommand::ToggleBorderlessStackLines;
+        workspace.execute(command).unwrap();
+        let view = workspace.view();
+        assert!(active_tab(&view).borderless);
+        assert_eq!(active_tab(&view).stack_lines, stack_lines);
+    }
+    let (restored, _) = Workspace::restore_layout(workspace.layout_snapshot(), shell("restored")).unwrap();
+    assert!(active_tab(&restored.view()).stack_lines);
+    workspace.execute(WorkspaceCommand::NavigateTab { number: 2 }).unwrap();
+    assert!(!active_tab(&workspace.view()).borderless);
+    workspace.execute(WorkspaceCommand::NavigateTab { number: 1 }).unwrap();
+    assert!(active_tab(&workspace.view()).stack_lines);
+    workspace.execute(WorkspaceCommand::ToggleBorderlessStackLines).unwrap();
+    assert!(!active_tab(&workspace.view()).borderless);
+    assert!(!active_tab(&workspace.view()).stack_lines);
+}

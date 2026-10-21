@@ -411,6 +411,7 @@ impl RuntimeConfig {
             "Selection Mode",
         );
         add("Other", singles(&[(ToggleBorderless, "Toggle Borderless")]), "z", "Toggle Borderless");
+        add("Other", singles(&[(ToggleBorderlessStackLines, "Borderless with Stack Lines")]), "Z", "Borderless with Stack Lines");
         add("Other", singles(&[(SetJumpMark, "Mark Pane (then character)")]), "g", "Mark Pane (then character)");
         add("Other", singles(&[(JumpToMark, "Jump to Pane (then character)")]), "g", "Jump to Pane (then character)");
         add("Other", singles(&[(Quit, "Quit")]), "q", "Quit");
@@ -613,6 +614,7 @@ fn parse_action(name: &str) -> Result<BindingAction, String> {
         "broadcast_manual" => Ok(BindingAction::BroadcastManual),
         "broadcast_target" | "toggle_manual_target" => Ok(BindingAction::ToggleManualTarget),
         "broadcast_reset" | "reset_broadcast" => Ok(BindingAction::ResetBroadcast),
+        "toggle_borderless_stack_lines" => Ok(BindingAction::ToggleBorderlessStackLines),
         "toggle_borderless" => Ok(BindingAction::ToggleBorderless),
         "set_jump_mark" => Ok(BindingAction::SetJumpMark),
         "jump_to_mark" => Ok(BindingAction::JumpToMark),
@@ -711,6 +713,7 @@ fn action_name(action: BindingAction) -> String {
         BindingAction::BroadcastManual => "broadcast_manual".into(),
         BindingAction::ToggleManualTarget => "broadcast_target".into(),
         BindingAction::ResetBroadcast => "broadcast_reset".into(),
+        BindingAction::ToggleBorderlessStackLines => "toggle_borderless_stack_lines".into(),
         BindingAction::ToggleBorderless => "toggle_borderless".into(),
         BindingAction::SetJumpMark => "set_jump_mark".into(),
         BindingAction::JumpToMark => "jump_to_mark".into(),

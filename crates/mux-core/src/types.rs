@@ -71,6 +71,7 @@ pub enum BroadcastScope {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WorkspaceCommand {
     ToggleBorderless,
+    ToggleBorderlessStackLines,
     SetJumpMark(u8),
     JumpToMark(u8),
     SplitFocused {

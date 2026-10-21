@@ -26,6 +26,7 @@ Broadcast
 Other
 <leader> y ~ Selection Mode
 <leader> z ~ Toggle Borderless
+<leader> Z ~ Borderless with Stack Lines
 <ctrl><alt> g ~ Mark Pane (then character)
 <alt> g ~ Jump to Pane (then character)
 <leader> q ~ Quit

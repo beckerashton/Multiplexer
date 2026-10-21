@@ -229,7 +229,11 @@ fn selection_freezes_history_consumes_paste_and_copies_across_viewports() {
     harness.wait_for_file("history-ready", None);
     harness.wait_for_screen("last history row", |s| s.contents().contains("ROW-079"));
     harness.send(b"\x02yggV40j");
-    harness.wait_for_screen("selection mode", |s| s.contents().contains("SELECT LINE"));
+    harness.wait_for_screen("selection mode", |s| {
+        (0..s.size().0).any(|row| {
+            s.cell(row, 1).is_some_and(|cell| cell.bgcolor() == vt100::Color::Rgb(0x44, 0x47, 0x5a))
+        })
+    });
     // Pasted motion-looking input, Alt navigation and mouse reports must not
     // change the selection or reach the underlying shell.
     harness.send(b"\x1b[200~Gjunk\x1b[201~\x1bh\x1b[<64;3;3M");
@@ -251,9 +255,9 @@ fn selection_snapshot_stays_fixed_and_escape_returns_to_live_output() {
     harness.command("printf '\\033[2J\\033[HFROZEN'; : > frozen-ready; while [ ! -e release-output ]; do sleep 0.02; done; printf '\\r\\nNEW-LIVE-OUTPUT'; : > output-done");
     harness.wait_for_file("frozen-ready", None);
     harness.wait_for_pane_text("FROZEN");
-    harness.send(b"\x02y");
+    harness.send(b"\x02yh");
     harness.wait_for_screen("selection started", |s| {
-        s.contents().contains("SELECT NORMAL")
+        s.cursor_position() == (2, 6)
     });
     fs::write(harness.directory.join("release-output"), b"").unwrap();
     harness.wait_for_file("output-done", None);
@@ -261,11 +265,13 @@ fn selection_snapshot_stays_fixed_and_escape_returns_to_live_output() {
     thread::sleep(Duration::from_millis(100));
     harness.send(b"v");
     harness.wait_for_screen("frozen selection", |s| {
-        s.contents().contains("SELECT VISUAL") && !s.contents().contains("NEW-LIVE-OUTPUT")
+        s.cell(2, 6).unwrap().bgcolor() == vt100::Color::Rgb(0x44, 0x47, 0x5a)
+            && !s.contents().contains("NEW-LIVE-OUTPUT")
     });
     harness.send(b"\x1b");
     harness.wait_for_screen("live output restored", |s| {
-        s.contents().contains("NEW-LIVE-OUTPUT") && !s.contents().contains("SELECT VISUAL")
+        s.contents().contains("NEW-LIVE-OUTPUT")
+            && s.cell(2, 6).unwrap().bgcolor() == vt100::Color::Default
     });
     harness.confirm_quit(READY);
 }
@@ -278,7 +284,7 @@ fn failed_yank_keeps_selection_and_can_retry() {
     // Fail every clipboard backend without writing to a real clipboard.
     for helper in ["wl-copy", "xclip", "xsel"] {
         let file = directory.0.join(helper);
-        fs::write(&file, "#!/bin/sh\nexit 1\n").unwrap();
+        fs::write(&file, format!("#!/bin/sh\n: > '{}-failed'\nexit 1\n", file.display())).unwrap();
         fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).unwrap();
     }
     let mut harness = Harness::start(&[("PATH", &path), ("WAYLAND_DISPLAY", "test-wayland")]);
@@ -286,7 +292,7 @@ fn failed_yank_keeps_selection_and_can_retry() {
     harness.wait_for_file("retry-ready", None);
     harness.wait_for_pane_text("RETRY");
     harness.send(b"\x02y0v4ly");
-    harness.wait_for_screen("clipboard error", |s| s.contents().contains("copy failed:"));
+    harness.wait_for_path(&directory.0.join("xsel-failed"), None);
     helper_environment(&directory.0);
     harness.send(b"y");
     harness.wait_for_path(&directory.0.join("clipboard-capture"), Some(b"RETRY"));

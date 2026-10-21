@@ -440,6 +440,7 @@ impl InputRouter {
             }
             BindingAction::ResetBroadcast => WorkspaceCommand::ResetBroadcast,
             BindingAction::ToggleBorderless => WorkspaceCommand::ToggleBorderless,
+            BindingAction::ToggleBorderlessStackLines => WorkspaceCommand::ToggleBorderlessStackLines,
             BindingAction::SetJumpMark | BindingAction::JumpToMark => {
                 self.jump_pending = Some(action == BindingAction::SetJumpMark);
                 return vec![InputRoute::Consume];

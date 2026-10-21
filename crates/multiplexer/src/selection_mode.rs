@@ -61,19 +61,6 @@ impl SelectionMode {
         (self.cursor.col, (self.cursor.row - self.top) as u16)
     }
 
-    pub fn hint(&self) -> String {
-        format!(
-            "SELECT {} {}/{} | hjkl w/b/e 0/$ gg/G | v/V select y yank Esc exit",
-            if self.anchor.is_some() {
-                if self.linewise { "LINE" } else { "VISUAL" }
-            } else {
-                "NORMAL"
-            },
-            self.cursor.row + 1,
-            self.total_rows()
-        )
-    }
-
     fn total_rows(&self) -> usize {
         self.history + usize::from(self.screen.size().0)
     }

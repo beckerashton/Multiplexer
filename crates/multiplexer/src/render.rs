@@ -5,7 +5,7 @@ use std::{
 };
 
 use mux_core::{
-    BindingConfig, BroadcastScope, InputRouter, PendingConfirmation, Workspace, WorkspaceView,
+    BindingConfig, InputRouter, PendingConfirmation, Workspace, WorkspaceView,
 };
 use ratatui::{
     Terminal, TerminalOptions, Viewport,
@@ -159,7 +159,6 @@ impl<W: Write> Renderer<W> {
         backend: &mut TerminalBackend,
         router: &InputRouter,
         config: &BindingConfig,
-        status: &str,
         quit_pending: bool,
         selection_mode: Option<&SelectionMode>,
     ) -> io::Result<()> {
@@ -170,7 +169,6 @@ impl<W: Write> Renderer<W> {
             backend,
             router,
             config,
-            status,
             quit_pending,
             selection_mode,
         );
@@ -185,7 +183,6 @@ fn compose(
     backend: &mut TerminalBackend,
     router: &InputRouter,
     config: &BindingConfig,
-    status: &str,
     quit_pending: bool,
     selection_mode: Option<&SelectionMode>,
 ) -> Scene {
@@ -217,8 +214,8 @@ fn compose(
         else {
             continue;
         };
-        let frame = crate::pane_geometry::stack_frame(rect, &slot.stack);
-        let inner = crate::pane_geometry::pane_content(rect, &slot.stack, tab.borderless);
+        let frame = crate::pane_geometry::stack_frame(rect, &slot.stack, tab.borderless);
+        let inner = crate::pane_geometry::pane_content(rect, &slot.stack, tab.borderless, tab.stack_lines);
         let width = inner.cols;
         let height = inner.rows;
         if width == 0 || height == 0 {
@@ -228,24 +225,15 @@ fn compose(
             continue;
         }
         let focused = slot_id == tab.focused_slot;
-        let header = format!(
-            " {} · {}/{}{} ",
-            tab.layout
-                .slots()
-                .iter()
-                .position(|id| *id == slot_id)
-                .unwrap_or(0)
-                + 1,
-            slot.stack.active.unwrap_or(0) + 1,
-            slot.stack.sessions.len(),
-            if tab.manual_broadcast_targets.contains(&slot_id) {
-                " *"
-            } else {
-                ""
-            }
-        );
+        let header = if tab.manual_broadcast_targets.contains(&slot_id) {
+            " * "
+        } else {
+            ""
+        };
+        if !tab.borderless || tab.stack_lines {
+            paint_stack_edges(&mut buffer, rect, frame, tab.borderless);
+        }
         if !tab.borderless {
-            paint_stack_edges(&mut buffer, rect, frame, &slot.stack);
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
@@ -280,54 +268,6 @@ fn compose(
                 }
             }
         }
-    }
-    let scope = match view.broadcast_scope {
-        BroadcastScope::Focused => "focused".to_string(),
-        BroadcastScope::VisibleTab => format!("BROADCAST ALL ({})", tab.slots.len()),
-        BroadcastScope::Manual => {
-            format!("BROADCAST MANUAL ({})", tab.manual_broadcast_targets.len())
-        }
-    };
-    let prompt = if quit_pending {
-        confirmation_text(&view, true)
-    } else if view.pending_confirmation.is_some() {
-        confirmation_text(&view, false)
-    } else if let Some(mode) = selection_mode {
-        mode.hint()
-    } else if router.resize_mode() {
-        "RESIZE: hjkl / HJKL · Alt-hjkl focus · Esc exits".into()
-    } else if router.broadcast_pending() {
-        "BROADCAST MENU".into()
-    } else if router.leader_pending() {
-        "LEADER".into()
-    } else if router.carry_pending() {
-        "CARRY: choose 1-9".into()
-    } else {
-        String::new()
-    };
-    if !tab.borderless && rows > 0 && cols > 0 {
-        buffer.set_stringn(
-            0,
-            rows - 1,
-            clip(
-                &if selection_mode.is_some() && !status.is_empty() {
-                    format!("{} · {}", status, prompt)
-                } else {
-                    format!("tab {}  {}  {}  {}", tab.number, scope, prompt, status)
-                },
-                cols,
-            ),
-            cols as usize,
-            Style::default().fg(if quit_pending || view.pending_confirmation.is_some() {
-                theme::RED
-            } else if view.broadcast_scope != BroadcastScope::Focused {
-                theme::PINK
-            } else if router.leader_pending() || router.carry_pending() || router.modal() {
-                theme::CYAN
-            } else {
-                theme::FOREGROUND
-            }),
-        );
     }
     if !tab.borderless && rows > 0 && cols > 0 {
         let mut x = 0;
@@ -407,8 +347,8 @@ fn compose(
         );
         cursor = None;
     }
-    if tab.borderless && (quit_pending || view.pending_confirmation.is_some()) {
-        bindings_popup(&mut buffer, &[], " Confirm ", &prompt);
+    if quit_pending || view.pending_confirmation.is_some() {
+        bindings_popup(&mut buffer, &[], " Confirm ", &confirmation_text(&view, quit_pending));
         cursor = None;
     }
     Scene { buffer, cursor }
@@ -418,18 +358,22 @@ fn paint_stack_edges(
     buffer: &mut Buffer,
     rect: mux_core::CellRect,
     frame: mux_core::CellRect,
-    stack: &mux_core::SlotStackView,
+    square: bool,
 ) {
     if rect.cols < 2 {
         return;
     }
     let style = Style::default().fg(theme::MUTED);
-    let active = stack.active.unwrap_or(0);
+    let (top_left, top_right, bottom_left, bottom_right) = if square {
+        ("┌", "┐", "└", "┘")
+    } else {
+        ("╭", "╮", "╰", "╯")
+    };
     for y in rect.y..rect.y + rect.rows {
-        let (member, left, right) = if y < frame.y {
-            (active - usize::from(frame.y - y), "╭", "╮")
+        let (left, right) = if y < frame.y {
+            (top_left, top_right)
         } else if y >= frame.y + frame.rows {
-            (active + 1 + usize::from(y - frame.y - frame.rows), "╰", "╯")
+            (bottom_left, bottom_right)
         } else {
             continue;
         };
@@ -438,13 +382,6 @@ fn paint_stack_edges(
             buffer.set_string(x, y, "─", style);
         }
         buffer.set_string(rect.x + rect.cols - 1, y, right, style);
-        buffer.set_stringn(
-            rect.x + 1,
-            y,
-            format!(" {} ", member + 1),
-            usize::from(rect.cols.saturating_sub(2)),
-            style,
-        );
     }
 }
 
@@ -712,22 +649,6 @@ fn convert_color(color: vt100::Color, default: Color) -> Color {
     }
 }
 
-fn clip(value: &str, width: u16) -> String {
-    use unicode_width::UnicodeWidthChar;
-
-    let mut used = 0_u16;
-    let mut clipped = String::new();
-    for character in value.chars() {
-        let cell_width = character.width().unwrap_or(0) as u16;
-        if used.saturating_add(cell_width) > width {
-            break;
-        }
-        clipped.push(character);
-        used = used.saturating_add(cell_width);
-    }
-    clipped
-}
-
 #[cfg(test)]
 mod tests {
     #[test]
@@ -794,16 +715,9 @@ mod tests {
         }
     }
 
-    use super::{clip, confirmation_text};
+    use super::confirmation_text;
     use mux_core::{Axis, SessionSpec, Workspace, WorkspaceCommand};
     use std::path::PathBuf;
-
-    #[test]
-    fn clip_uses_terminal_cell_width() {
-        assert_eq!(clip("a界b", 3), "a界");
-        assert_eq!(clip("界", 1), "");
-        assert_eq!(clip("e\u{301}x", 1), "e\u{301}");
-    }
 
     fn scene(parser: &vt100::Parser, area: ratatui::layout::Rect) -> super::Scene {
         let mut buffer = ratatui::buffer::Buffer::empty(area);
@@ -974,14 +888,14 @@ mod tests {
             sessions: (0..3).map(mux_core::SessionId).collect(),
             active: Some(1),
         };
-        let frame = crate::pane_geometry::stack_frame(rect, &stack);
+        let frame = crate::pane_geometry::stack_frame(rect, &stack, false);
         let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 16, 12));
-        super::paint_stack_edges(&mut buffer, rect, frame, &stack);
+        super::paint_stack_edges(&mut buffer, rect, frame, false);
         assert_eq!(buffer[(2, 1)].symbol(), "╭");
-        assert_eq!(buffer[(4, 1)].symbol(), "1");
+        assert_eq!(buffer[(4, 1)].symbol(), "─");
         assert_eq!(buffer[(13, 1)].symbol(), "╮");
         assert_eq!(buffer[(2, 9)].symbol(), "╰");
-        assert_eq!(buffer[(4, 9)].symbol(), "3");
+        assert_eq!(buffer[(4, 9)].symbol(), "─");
         assert_eq!(buffer[(13, 9)].symbol(), "╯");
         assert_eq!(buffer[(2, 2)].symbol(), " ");
         assert_eq!(crate::pane_geometry::content(frame).rows, 5);
