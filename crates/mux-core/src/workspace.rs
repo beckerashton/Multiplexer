@@ -561,6 +561,11 @@ impl Workspace {
                     Transition::unchanged()
                 })
             }
+            WorkspaceCommand::ToggleFold => {
+                let tab = self.active_tab_mut();
+                tab.layout.toggle_fold(tab.focused_slot)?;
+                Ok(Transition::changed())
+            }
             WorkspaceCommand::ToggleBorderless | WorkspaceCommand::ToggleBorderlessStackLines => {
                 let stack_lines = matches!(command, WorkspaceCommand::ToggleBorderlessStackLines);
                 let tab = self.active_tab_mut();
@@ -1291,9 +1296,11 @@ impl Workspace {
     fn layout_fits(&self, layout: &LayoutTree) -> bool {
         layout
             .geometry(self.bounds, self.minimum_pane_size)
-            .values()
-            .all(|rect| {
-                rect.cols >= self.minimum_pane_size.cols && rect.rows >= self.minimum_pane_size.rows
+            .iter()
+            .all(|(slot, rect)| {
+                layout.is_folded(*slot)
+                    || (rect.cols >= self.minimum_pane_size.cols
+                        && rect.rows >= self.minimum_pane_size.rows)
             })
     }
     fn reset_broadcast_state(&mut self) -> bool {

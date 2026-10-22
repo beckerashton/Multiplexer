@@ -266,3 +266,64 @@ fn nested_resize_uses_selected_side_and_outer_edges_do_not_move() {
     );
     assert_eq!(tree, before);
 }
+
+#[test]
+fn folding_reclaims_space_on_both_axes_and_restores_ratios() {
+    for axis in [Axis::Horizontal, Axis::Vertical] {
+        let mut tree = LayoutTree::new(SlotId(1));
+        tree.split(SlotId(1), axis, 350, SlotId(2)).unwrap();
+        tree.split(SlotId(2), axis, 650, SlotId(3)).unwrap();
+        let original = tree.clone();
+        let before = tree.geometry(bounds(), MIN);
+        for slot in [SlotId(1), SlotId(2), SlotId(3)] {
+            tree.toggle_fold(slot).unwrap();
+            let folded = tree.geometry(bounds(), MIN);
+            let span = |rect: CellRect| match axis {
+                Axis::Horizontal => rect.rows,
+                Axis::Vertical => rect.cols,
+            };
+            assert_eq!(span(folded[&slot]), 1);
+            assert_eq!(
+                folded
+                    .values()
+                    .map(|r| u32::from(r.cols) * u32::from(r.rows))
+                    .sum::<u32>(),
+                u32::from(bounds().cols) * u32::from(bounds().rows)
+            );
+            for size in 0..12 {
+                let tiny = tree.geometry(
+                    CellRect {
+                        cols: size,
+                        rows: size,
+                        ..bounds()
+                    },
+                    MIN,
+                );
+                assert_eq!(
+                    tiny.values()
+                        .map(|r| u32::from(r.cols) * u32::from(r.rows))
+                        .sum::<u32>(),
+                    u32::from(size) * u32::from(size)
+                );
+            }
+            tree.toggle_fold(slot).unwrap();
+            assert_eq!(tree, original);
+            assert_eq!(tree.geometry(bounds(), MIN), before);
+        }
+        tree.toggle_fold(SlotId(2)).unwrap();
+        tree.toggle_fold(SlotId(3)).unwrap();
+        let folded_subtree = tree.geometry(bounds(), MIN);
+        let span = |rect: CellRect| {
+            if axis == Axis::Horizontal {
+                rect.rows
+            } else {
+                rect.cols
+            }
+        };
+        assert_eq!(span(folded_subtree[&SlotId(2)]), 1);
+        assert_eq!(span(folded_subtree[&SlotId(3)]), 1);
+        tree.remove(SlotId(1)).unwrap();
+        assert!(tree.is_folded(SlotId(2)));
+        assert!(tree.is_valid());
+    }
+}

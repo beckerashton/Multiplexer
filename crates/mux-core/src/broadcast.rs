@@ -26,21 +26,26 @@ pub fn plan_broadcast(view: &WorkspaceView, scope: BroadcastScope) -> BroadcastP
     };
     let mut recipients = BTreeSet::new();
 
+    let add_unfolded = |recipients: &mut BTreeSet<SessionId>, slot: &crate::SlotView| {
+        if !tab.layout.is_folded(slot.id) {
+            add_visible(recipients, slot, view);
+        }
+    };
     match scope {
         BroadcastScope::Focused => {
             if let Some(slot) = tab.slots.get(&tab.focused_slot) {
-                add_visible(&mut recipients, slot, view);
+                add_unfolded(&mut recipients, slot);
             }
         }
         BroadcastScope::VisibleTab => {
             for slot in tab.slots.values() {
-                add_visible(&mut recipients, slot, view);
+                add_unfolded(&mut recipients, slot);
             }
         }
         BroadcastScope::Manual => {
             for slot_id in &tab.manual_broadcast_targets {
                 if let Some(slot) = tab.slots.get(slot_id) {
-                    add_visible(&mut recipients, slot, view);
+                    add_unfolded(&mut recipients, slot);
                 }
             }
         }

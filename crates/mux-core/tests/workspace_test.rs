@@ -1148,3 +1148,62 @@ fn stack_line_borderless_mode_toggles_switches_and_restores_per_tab() {
     assert!(!active_tab(&workspace.view()).borderless);
     assert!(!active_tab(&workspace.view()).stack_lines);
 }
+
+#[test]
+fn folded_panes_remain_navigable_and_persist_without_changing_sessions() {
+    let (mut workspace, _) = Workspace::new(shell("one"));
+    workspace
+        .execute(WorkspaceCommand::SplitFocused {
+            axis: Axis::Vertical,
+            session: shell("two"),
+        })
+        .unwrap();
+    let before = workspace.view();
+    let slot = active_tab(&before).focused_slot;
+    let transition = workspace.execute(WorkspaceCommand::ToggleFold).unwrap();
+    assert!(transition.changed);
+    assert!(transition.effects.is_empty());
+    assert_eq!(workspace.view().sessions, before.sessions);
+    let folded = workspace.view();
+    assert!(active_tab(&folded).layout.is_folded(slot));
+    for scope in [
+        BroadcastScope::Focused,
+        BroadcastScope::VisibleTab,
+        BroadcastScope::Manual,
+    ] {
+        let mut view = folded.clone();
+        view.tabs
+            .iter_mut()
+            .find(|t| t.id == view.active_tab)
+            .unwrap()
+            .manual_broadcast_targets
+            .insert(slot);
+        let plan = mux_core::plan_broadcast(&view, scope);
+        assert!(
+            !plan
+                .recipients
+                .contains(&active_tab(&view).slots[&slot].stack.sessions[0])
+        );
+    }
+    let saved = workspace.layout_snapshot();
+    let (restored, _) = Workspace::restore_layout(saved.clone(), shell("restored")).unwrap();
+    assert_eq!(restored.layout_snapshot(), saved);
+    workspace
+        .execute(WorkspaceCommand::CyclePane { delta: 1 })
+        .unwrap();
+    assert_ne!(active_tab(&workspace.view()).focused_slot, slot);
+    workspace
+        .execute(WorkspaceCommand::CyclePane { delta: -1 })
+        .unwrap();
+    assert_eq!(active_tab(&workspace.view()).focused_slot, slot);
+    workspace.execute(WorkspaceCommand::ToggleFold).unwrap();
+    assert_eq!(workspace.view(), before);
+    workspace.execute(WorkspaceCommand::ToggleFold).unwrap();
+    // Existing folded panes must not prevent another split from fitting.
+    workspace
+        .execute(WorkspaceCommand::SplitTab {
+            axis: Axis::Horizontal,
+            session: shell("three"),
+        })
+        .unwrap();
+}

@@ -214,6 +214,26 @@ fn compose(
         else {
             continue;
         };
+        if tab.layout.is_folded(slot_id) {
+            let style = Style::default().fg(if slot_id == tab.focused_slot {
+                theme::PURPLE
+            } else {
+                theme::MUTED
+            });
+            if rect.cols > 0 && rect.rows > 0 {
+                if rect.cols == 1 {
+                    for y in rect.y..rect.y + rect.rows {
+                        buffer[(rect.x, y)].set_symbol("│").set_style(style);
+                    }
+                } else {
+                    for x in rect.x..rect.x + rect.cols {
+                        buffer[(x, rect.y)].set_symbol("─").set_style(style);
+                    }
+                }
+                buffer[(rect.x, rect.y)].set_symbol("▸").set_style(style);
+            }
+            continue;
+        }
         let frame = crate::pane_geometry::stack_frame(rect, &slot.stack, tab.borderless);
         let inner = crate::pane_geometry::pane_content(rect, &slot.stack, tab.borderless, tab.stack_lines);
         let width = inner.cols;

@@ -48,6 +48,7 @@ swap_right = "Ctrl-Alt-l"
 resize_mode = "r"
 equalize_widths = "="
 equalize_heights = "+"
+toggle_fold = "f"
 broadcast_menu = "b"
 split_vertical = "\\"
 split_horizontal = "-"
@@ -159,6 +160,7 @@ wide and combining characters, stale-cell erasure, and cursor-only updates.
 - **Alt-1…9:** select the numbered tab; a missing tab starts one shell.
 - **Ctrl-b then `-` / `\`:** split the focused pane horizontally / vertically.
 - **Ctrl-b then `_` / `|`:** split the whole tab horizontally / vertically. The existing layout stays together above / left of the new focused pane.
+- **Ctrl-b then f:** fold / unfold the focused pane (including its stack). Folded panes show a thin edge marked `▸`, giving their space to neighboring panes. Use pane navigation to focus that edge and press the same binding to unfold. Sessions keep running at their last terminal size; folded panes receive no typing, mouse input, or broadcast input. Unfolding restores split proportions, and folded state is saved with the layout. Rebind with `toggle_fold`.
 - **Ctrl-b then r:** enter resize mode. `hjkl` pushes the focused pane or stack’s left/bottom/top/right edge outward by one cell; `HJKL` uses five-cell steps. Alt-hjkl changes focus while staying in resize mode. Escape exits. Terminal edges and neighboring minimum sizes limit expansion.
 - **Ctrl-b then `=` / `+`:** equalize pane widths / heights throughout the current tab. Nested splits share space by the number of panes along that axis; ratios on the other axis stay unchanged. Pane minimum sizes and cell rounding still apply. Rebind with `equalize_widths` / `equalize_heights`.
 - **Ctrl-b then b:** open the broadcast submenu. `b` toggles visible-pane broadcast, `B` toggles manual broadcast, `m` toggles the focused pane’s manual target, and `r` resets broadcast. A command closes the submenu; Escape cancels. Unbound keys leave it open.

@@ -18,6 +18,8 @@ pub struct LayoutTree {
 enum Node {
     Leaf {
         slot: SlotId,
+        #[serde(default)]
+        folded: bool,
     },
     Split {
         axis: Axis,
@@ -64,7 +66,10 @@ impl LayoutTree {
 
     pub fn new(root: SlotId) -> Self {
         Self {
-            root: Node::Leaf { slot: root },
+            root: Node::Leaf {
+                slot: root,
+                folded: false,
+            },
         }
     }
 
@@ -81,6 +86,21 @@ impl LayoutTree {
     /// Checks the invariants required by a persisted layout tree.
     pub fn is_valid(&self) -> bool {
         self.root.is_valid(&mut BTreeSet::new())
+    }
+
+    pub fn is_folded(&self, slot: SlotId) -> bool {
+        self.root.is_folded(slot)
+    }
+
+    pub fn toggle_fold(&mut self, slot: SlotId) -> Result<(), LayoutError> {
+        let leaf = self
+            .root
+            .find_leaf_mut(slot)
+            .ok_or(LayoutError::UnknownSlot(slot))?;
+        if let Node::Leaf { folded, .. } = leaf {
+            *folded = !*folded;
+        }
+        Ok(())
     }
 
     /// Splits `slot`, retaining it as the first child and placing `new_slot`
@@ -105,8 +125,14 @@ impl LayoutTree {
         *leaf = Node::Split {
             axis,
             ratio,
-            first: Box::new(Node::Leaf { slot }),
-            second: Box::new(Node::Leaf { slot: new_slot }),
+            first: Box::new(Node::Leaf {
+                slot,
+                folded: false,
+            }),
+            second: Box::new(Node::Leaf {
+                slot: new_slot,
+                folded: false,
+            }),
         };
         Ok(new_slot)
     }
@@ -124,12 +150,21 @@ impl LayoutTree {
         if self.contains(new_slot) {
             return Err(LayoutError::UnknownSlot(new_slot));
         }
-        let first = std::mem::replace(&mut self.root, Node::Leaf { slot: new_slot });
+        let first = std::mem::replace(
+            &mut self.root,
+            Node::Leaf {
+                slot: new_slot,
+                folded: false,
+            },
+        );
         self.root = Node::Split {
             axis,
             ratio,
             first: Box::new(first),
-            second: Box::new(Node::Leaf { slot: new_slot }),
+            second: Box::new(Node::Leaf {
+                slot: new_slot,
+                folded: false,
+            }),
         };
         Ok(new_slot)
     }
@@ -158,14 +193,21 @@ impl LayoutTree {
             .sibling_leaf(slot)
             .expect("non-root leaf has a sibling subtree");
         let neighbor = sibling.first_slot().expect("layout subtree has a leaf");
-        let root = std::mem::replace(&mut self.root, Node::Leaf { slot: SlotId(0) });
+        let root = std::mem::replace(
+            &mut self.root,
+            Node::Leaf {
+                slot: SlotId(0),
+                folded: false,
+            },
+        );
         self.root = root.remove_leaf(slot).expect("non-root leaf is removable");
         Ok(LayoutRemoval::Removed { neighbor })
     }
 
     /// Returns cell rectangles that exactly partition `bounds`. Each leaf is
     /// at least `min.cols` by `min.rows` whenever the supplied bounds can fit
-    /// the tree's calculated minimum requirements.
+    /// the tree's calculated minimum requirements. Folded leaves instead reserve
+    /// one cell along their divider, leaving split ratios intact for unfolding.
     pub fn geometry(&self, bounds: CellRect, min: CellRect) -> BTreeMap<SlotId, CellRect> {
         let mut result = BTreeMap::new();
         self.root
@@ -322,6 +364,22 @@ impl LayoutTree {
 }
 
 impl Node {
+    fn is_folded(&self, wanted: SlotId) -> bool {
+        match self {
+            Self::Leaf { slot, folded } => *slot == wanted && *folded,
+            Self::Split { first, second, .. } => {
+                first.is_folded(wanted) || second.is_folded(wanted)
+            }
+        }
+    }
+
+    fn all_folded(&self) -> bool {
+        match self {
+            Self::Leaf { folded, .. } => *folded,
+            Self::Split { first, second, .. } => first.all_folded() && second.all_folded(),
+        }
+    }
+
     /// Count panes sharing the requested span: add across its dividers, take
     /// the maximum across perpendicular dividers so rows do not count as columns.
     fn equalize(&mut self, axis: Axis) -> (u32, bool) {
@@ -355,14 +413,14 @@ impl Node {
 
     fn contains(&self, wanted: SlotId) -> bool {
         match self {
-            Self::Leaf { slot } => *slot == wanted,
+            Self::Leaf { slot, .. } => *slot == wanted,
             Self::Split { first, second, .. } => first.contains(wanted) || second.contains(wanted),
         }
     }
 
     fn is_valid(&self, slots: &mut BTreeSet<SlotId>) -> bool {
         match self {
-            Self::Leaf { slot } => slots.insert(*slot),
+            Self::Leaf { slot, .. } => slots.insert(*slot),
             Self::Split {
                 ratio,
                 first,
@@ -379,7 +437,7 @@ impl Node {
 
     fn collect_slots(&self, result: &mut Vec<SlotId>) {
         match self {
-            Self::Leaf { slot } => result.push(*slot),
+            Self::Leaf { slot, .. } => result.push(*slot),
             Self::Split { first, second, .. } => {
                 first.collect_slots(result);
                 second.collect_slots(result);
@@ -389,7 +447,7 @@ impl Node {
 
     fn find_leaf_mut(&mut self, wanted: SlotId) -> Option<&mut Node> {
         match self {
-            Self::Leaf { slot } if *slot == wanted => Some(self),
+            Self::Leaf { slot, .. } if *slot == wanted => Some(self),
             Self::Leaf { .. } => None,
             Self::Split { first, second, .. } => first
                 .find_leaf_mut(wanted)
@@ -399,7 +457,7 @@ impl Node {
 
     fn first_slot(&self) -> Option<SlotId> {
         match self {
-            Self::Leaf { slot } => Some(*slot),
+            Self::Leaf { slot, .. } => Some(*slot),
             Self::Split { first, .. } => first.first_slot(),
         }
     }
@@ -423,11 +481,11 @@ impl Node {
 
     fn remove_leaf(self, wanted: SlotId) -> Option<Node> {
         match self {
-            Self::Leaf { slot } => {
+            Self::Leaf { slot, folded } => {
                 if slot == wanted {
                     None
                 } else {
-                    Some(Self::Leaf { slot })
+                    Some(Self::Leaf { slot, folded })
                 }
             }
             Self::Split {
@@ -454,6 +512,7 @@ impl Node {
 
     fn min_span(&self, min_cols: u16, min_rows: u16) -> (u32, u32) {
         match self {
+            Self::Leaf { folded: true, .. } => (1, 1),
             Self::Leaf { .. } => (min_cols as u32, min_rows as u32),
             Self::Split {
                 axis,
@@ -479,7 +538,7 @@ impl Node {
         result: &mut BTreeMap<SlotId, CellRect>,
     ) {
         match self {
-            Self::Leaf { slot } => {
+            Self::Leaf { slot, .. } => {
                 result.insert(*slot, bounds);
             }
             Self::Split {
@@ -488,22 +547,18 @@ impl Node {
                 first,
                 second,
             } => {
-                let (first_need_cols, first_need_rows) = first.min_span(min_cols, min_rows);
-                let (second_need_cols, second_need_rows) = second.min_span(min_cols, min_rows);
-                let (available, first_need, second_need) = match axis {
-                    Axis::Vertical => (bounds.cols as u32, first_need_cols, second_need_cols),
-                    Axis::Horizontal => (bounds.rows as u32, first_need_rows, second_need_rows),
-                };
-                let proportional =
-                    available.saturating_mul(*ratio as u32) / LayoutTree::RATIO_SCALE as u32;
-                let first_span = if available >= first_need + second_need {
-                    proportional.clamp(first_need, available - second_need)
-                } else {
-                    // A very small terminal cannot satisfy every leaf minimum;
-                    // retain an exact, deterministic partition until it grows.
-                    proportional.min(available)
-                } as u16;
-                let (first_bounds, second_bounds) = bounds_at(*axis, bounds, first_span);
+                let (first_bounds, second_bounds) = child_bounds(
+                    *axis,
+                    *ratio,
+                    bounds,
+                    CellRect {
+                        cols: min_cols,
+                        rows: min_rows,
+                        ..CellRect::default()
+                    },
+                    first,
+                    second,
+                );
                 first.geometry(first_bounds, min_cols, min_rows, result);
                 second.geometry(second_bounds, min_cols, min_rows, result);
             }
@@ -512,7 +567,7 @@ impl Node {
 
     fn swap_slots(&mut self, a: SlotId, b: SlotId) {
         match self {
-            Self::Leaf { slot } => {
+            Self::Leaf { slot, .. } => {
                 if *slot == a {
                     *slot = b;
                 } else if *slot == b {
@@ -631,7 +686,13 @@ fn child_bounds(
     };
     let proportional = available.saturating_mul(ratio as u32) / LayoutTree::RATIO_SCALE as u32;
     let span = if available >= first_need + second_need {
-        proportional.clamp(first_need, available - second_need)
+        if first.all_folded() && !second.all_folded() {
+            first_need
+        } else if second.all_folded() && !first.all_folded() {
+            available - second_need
+        } else {
+            proportional.clamp(first_need, available - second_need)
+        }
     } else {
         proportional.min(available)
     } as u16;

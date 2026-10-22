@@ -1,12 +1,14 @@
 use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 use std::{
     io::{Read, Write},
+    path::PathBuf,
     sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
 
 struct Harness {
+    directory: PathBuf,
     child: Box<dyn Child + Send + Sync>,
     writer: Box<dyn Write + Send>,
     output: mpsc::Receiver<Vec<u8>>,
@@ -16,10 +18,16 @@ impl Drop for Harness {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        let _ = std::fs::remove_dir_all(&self.directory);
     }
 }
 impl Harness {
     fn new() -> Self {
+        let directory = std::env::temp_dir().join(format!(
+            "mux-todo-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: 67,
@@ -29,6 +37,7 @@ impl Harness {
             })
             .unwrap();
         let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_multiplexer"));
+        command.env("XDG_STATE_HOME", &directory);
         command.env("SHELL", "/bin/sh");
         command.env("ENV", "/dev/null");
         command.env("PS1", "todo-shell> ");
@@ -46,6 +55,7 @@ impl Harness {
             }
         });
         Self {
+            directory,
             child,
             writer,
             output,

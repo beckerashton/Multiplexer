@@ -9,6 +9,7 @@ Manage Panes
 <leader> r ~ Resize Mode
 <leader> =/+ ~ Equalize Widths / Heights
 <leader> x/X ~ Kill Session / Stack
+<leader> f ~ Fold / Unfold Pane
 
 Manage Stacks
 <leader> a ~ Add Terminal to Stack

@@ -344,6 +344,13 @@ impl RuntimeConfig {
         );
 
         add(
+            "Manage Panes",
+            singles(&[(ToggleFold, "Fold / Unfold Pane")]),
+            "f",
+            "Fold / Unfold Pane",
+        );
+
+        add(
             "Manage Stacks",
             singles(&[(AddToStack, "Add Terminal to Stack")]),
             "a",
@@ -615,6 +622,7 @@ fn parse_action(name: &str) -> Result<BindingAction, String> {
         "broadcast_target" | "toggle_manual_target" => Ok(BindingAction::ToggleManualTarget),
         "broadcast_reset" | "reset_broadcast" => Ok(BindingAction::ResetBroadcast),
         "toggle_borderless_stack_lines" => Ok(BindingAction::ToggleBorderlessStackLines),
+        "toggle_fold" => Ok(BindingAction::ToggleFold),
         "toggle_borderless" => Ok(BindingAction::ToggleBorderless),
         "set_jump_mark" => Ok(BindingAction::SetJumpMark),
         "jump_to_mark" => Ok(BindingAction::JumpToMark),
@@ -714,6 +722,7 @@ fn action_name(action: BindingAction) -> String {
         BindingAction::ToggleManualTarget => "broadcast_target".into(),
         BindingAction::ResetBroadcast => "broadcast_reset".into(),
         BindingAction::ToggleBorderlessStackLines => "toggle_borderless_stack_lines".into(),
+        BindingAction::ToggleFold => "toggle_fold".into(),
         BindingAction::ToggleBorderless => "toggle_borderless".into(),
         BindingAction::SetJumpMark => "set_jump_mark".into(),
         BindingAction::JumpToMark => "jump_to_mark".into(),
@@ -728,9 +737,9 @@ mod tests {
 
     #[test]
     fn modal_bindings_have_separate_scopes_and_help_uses_custom_keys() {
-        assert!(RuntimeConfig::from_toml_str("[bindings]\nresize_mode = \"f\"").is_ok());
+        assert!(RuntimeConfig::from_toml_str("[bindings]\ntoggle_fold = \"F\"\nresize_mode = \"f\"").is_ok());
         let config = RuntimeConfig::from_toml_str(
-            "[bindings]\nresize_mode = \"f\"\nbroadcast_menu = \"c\"\nbroadcast_reset = \"f\"",
+            "[bindings]\ntoggle_fold = \"F\"\nresize_mode = \"f\"\nbroadcast_menu = \"c\"\nbroadcast_reset = \"f\"",
         )
         .unwrap();
         assert_eq!(
@@ -814,7 +823,7 @@ mod tests {
     #[test]
     fn popup_preserves_custom_directions_and_tab_settings() {
         let config = RuntimeConfig::from_toml_str(
-            "alt_numbers = false\n[bindings]\nfocus_left = \"f\"\nswap_left = \"Ctrl-Alt-u\"",
+            "alt_numbers = false\n[bindings]\ntoggle_fold = \"F\"\nfocus_left = \"f\"\nswap_left = \"Ctrl-Alt-u\"",
         )
         .unwrap();
         let help = config.popup_help();
@@ -994,6 +1003,7 @@ focus_right = "h"
 focus_left = "Alt-l"
 focus_right = "Alt-h"
 carry_1 = "f"
+toggle_fold = "F"
 "#,
         )
         .unwrap();

@@ -589,6 +589,7 @@ fn broadcast_submenu_waits_for_a_command_or_escape_without_forwarding() {
 #[test]
 fn modal_entry_and_broadcast_commands_support_separate_binding_scopes() {
     let mut config = BindingConfig::default();
+    config.rebind(b'F', BindingAction::ToggleFold).unwrap();
     config.rebind(b'f', BindingAction::ResizeMode).unwrap();
     config.rebind(b'c', BindingAction::BroadcastMenu).unwrap();
     config.rebind(b'f', BindingAction::ResetBroadcast).unwrap();

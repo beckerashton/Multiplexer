@@ -439,6 +439,7 @@ impl InputRouter {
                 WorkspaceCommand::ToggleManualBroadcastTarget(context.focused_slot)
             }
             BindingAction::ResetBroadcast => WorkspaceCommand::ResetBroadcast,
+            BindingAction::ToggleFold => WorkspaceCommand::ToggleFold,
             BindingAction::ToggleBorderless => WorkspaceCommand::ToggleBorderless,
             BindingAction::ToggleBorderlessStackLines => WorkspaceCommand::ToggleBorderlessStackLines,
             BindingAction::SetJumpMark | BindingAction::JumpToMark => {

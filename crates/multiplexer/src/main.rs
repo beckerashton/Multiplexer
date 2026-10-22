@@ -491,12 +491,16 @@ impl EventHandler<'_> {
                         .iter()
                         .find(|tab| tab.id == view.active_tab)
                         .expect("active tab");
-                    let session = tab.slots.get(&tab.focused_slot).and_then(|slot| {
-                        slot.stack
-                            .active
-                            .and_then(|index| slot.stack.sessions.get(index))
-                            .copied()
-                    });
+                    let session = tab
+                        .slots
+                        .get(&tab.focused_slot)
+                        .filter(|_| !tab.layout.is_folded(tab.focused_slot))
+                        .and_then(|slot| {
+                            slot.stack
+                                .active
+                                .and_then(|index| slot.stack.sessions.get(index))
+                                .copied()
+                        });
                     if let Some((session, screen)) =
                         session.and_then(|id| backend.screen(id).map(|screen| (id, screen)))
                     {
@@ -601,6 +605,9 @@ fn apply_command(
 fn focused_cursor(workspace: &Workspace, backend: &TerminalBackend) -> Option<(u16, u16)> {
     let view = workspace.view();
     let tab = view.tabs.iter().find(|tab| tab.id == view.active_tab)?;
+    if tab.layout.is_folded(tab.focused_slot) {
+        return None;
+    }
     let slot = tab.slots.get(&tab.focused_slot)?;
     let session = *slot.stack.sessions.get(slot.stack.active?)?;
     let (row, col) = backend.screen(session)?.cursor_position();
@@ -688,6 +695,9 @@ fn scroll_mouse(
         .find(|tab| tab.id == view.active_tab)
         .expect("active tab");
     for (slot_id, rect) in tab.layout.geometry(view.bounds, view.minimum_pane_size) {
+        if tab.layout.is_folded(slot_id) {
+            continue;
+        }
         let Some(slot) = tab.slots.get(&slot_id) else {
             continue;
         };
@@ -734,6 +744,9 @@ fn forward_mouse(
         .iter()
         .find(|tab| tab.id == view.active_tab)
         .expect("active tab");
+    if tab.layout.is_folded(tab.focused_slot) {
+        return;
+    }
     let Some(rect) = tab
         .layout
         .geometry(view.bounds, view.minimum_pane_size)
