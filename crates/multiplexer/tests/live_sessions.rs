@@ -123,7 +123,7 @@ fn live_processes_survive_stack_carry_and_broadcast_scope_is_exact() {
     assert_ne!(pid_b, pid_c, "stack members must be distinct processes");
 
     // Create tab 2 with shell D and prove its startup before switching back.
-    harness.send(&[0x02, b't']);
+    harness.send(&[0x02, b'c']);
     harness.command("printf '%s' \"$$\" > pid-d; : > ready-d");
     let pid_d = harness.wait_for_file("pid-d");
     assert!(!pid_d.is_empty());

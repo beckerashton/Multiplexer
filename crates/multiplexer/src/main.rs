@@ -615,7 +615,7 @@ fn focused_cursor(workspace: &Workspace, backend: &TerminalBackend) -> Option<(u
         .layout
         .geometry(view.bounds, view.minimum_pane_size)
         .get(&slot.id)?;
-    let inner = pane_geometry::pane_content(rect, &slot.stack, tab.borderless, tab.stack_lines);
+    let inner = pane_geometry::pane_content(rect, &slot.stack, slot.visibility);
     if inner.cols == 0 || inner.rows == 0 {
         return None;
     }
@@ -673,7 +673,11 @@ fn apply_effects(
 }
 fn sync_bounds(workspace: &mut Workspace) -> io::Result<()> {
     let (cols, rows) = terminal::size()?;
-    workspace.set_bounds(pane_geometry::workspace_bounds(cols, rows, workspace.borderless()));
+    workspace.set_bounds(pane_geometry::workspace_bounds(
+        cols,
+        rows,
+        workspace.top_bar_hidden(),
+    ));
     Ok(())
 }
 
@@ -701,7 +705,7 @@ fn scroll_mouse(
         let Some(slot) = tab.slots.get(&slot_id) else {
             continue;
         };
-        let inner = pane_geometry::pane_content(rect, &slot.stack, tab.borderless, tab.stack_lines);
+        let inner = pane_geometry::pane_content(rect, &slot.stack, slot.visibility);
         if !pane_geometry::contains(inner, event.x, event.y) {
             continue;
         }
@@ -758,7 +762,7 @@ fn forward_mouse(
     let Some(slot) = tab.slots.get(&tab.focused_slot) else {
         return;
     };
-    let rect = pane_geometry::pane_content(rect, &slot.stack, tab.borderless, tab.stack_lines);
+    let rect = pane_geometry::pane_content(rect, &slot.stack, slot.visibility);
     if !pane_geometry::contains(rect, event.x, event.y) {
         return;
     }

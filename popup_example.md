@@ -17,12 +17,16 @@ Manage Stacks
 
 Manage Tabs
 <alt> 1-9 ~ Switch / Create Tab
-<leader> t/w ~ Create / Close Tab
+<leader> c/w ~ Create / Close Tab
 <ctrl><alt> 1-9 ~ Carry Pane to Tab
 <leader> <ctrl><alt> 1-9 ~ Carry Stack to Tab
 
 Broadcast
 <leader> b ~ Broadcast Menu
+
+Visibility
+<leader> t ~ Toggle Pane Visibility
+<leader> T ~ Toggle Tab Visibility
 
 Other
 <leader> y ~ Selection Mode

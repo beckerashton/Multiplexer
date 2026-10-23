@@ -70,6 +70,10 @@ pub enum BroadcastScope {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WorkspaceCommand {
+    ToggleVisibility {
+        element: VisibilityElement,
+        global: bool,
+    },
     ToggleFold,
     ToggleBorderless,
     ToggleBorderlessStackLines,
@@ -145,4 +149,69 @@ pub enum LifecycleEffect {
     Terminate {
         session: SessionId,
     },
+}
+
+/// Decorations which can be toggled from the visibility menus.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VisibilityElement {
+    TopBar,
+    Borders,
+    InsideBorders,
+    OutsideBorders,
+    Top,
+    Left,
+    Bottom,
+    Right,
+    StackLines,
+    Folds,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PaneVisibility {
+    pub top: bool,
+    pub left: bool,
+    pub bottom: bool,
+    pub right: bool,
+    pub stack_lines: bool,
+}
+impl Default for PaneVisibility {
+    fn default() -> Self {
+        Self {
+            top: true,
+            left: true,
+            bottom: true,
+            right: true,
+            stack_lines: true,
+        }
+    }
+}
+impl PaneVisibility {
+    pub fn visible(self, element: VisibilityElement) -> bool {
+        match element {
+            VisibilityElement::Borders => self.top && self.left && self.bottom && self.right,
+            VisibilityElement::Top => self.top,
+            VisibilityElement::Left => self.left,
+            VisibilityElement::Bottom => self.bottom,
+            VisibilityElement::Right => self.right,
+            VisibilityElement::StackLines => self.stack_lines,
+            _ => true,
+        }
+    }
+    pub fn set(&mut self, element: VisibilityElement, visible: bool) {
+        match element {
+            VisibilityElement::Borders => {
+                self.top = visible;
+                self.left = visible;
+                self.bottom = visible;
+                self.right = visible;
+            }
+            VisibilityElement::Top => self.top = visible,
+            VisibilityElement::Left => self.left = visible,
+            VisibilityElement::Bottom => self.bottom = visible,
+            VisibilityElement::Right => self.right = visible,
+            VisibilityElement::StackLines => self.stack_lines = visible,
+            _ => (),
+        }
+    }
 }

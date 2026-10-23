@@ -41,6 +41,7 @@ pub struct InputRouter {
     carry_pending: bool,
     resize_mode: bool,
     broadcast_pending: bool,
+    visibility_pending: Option<bool>,
     csi: Vec<u8>,
     pending_bytes: VecDeque<u8>,
 }
@@ -63,7 +64,11 @@ impl InputRouter {
     }
 
     pub fn modal(&self) -> bool {
-        self.resize_mode || self.broadcast_pending
+        self.resize_mode || self.broadcast_pending || self.visibility_pending.is_some()
+    }
+
+    pub fn visibility_pending(&self) -> Option<bool> {
+        self.visibility_pending
     }
 
     pub fn leader_pending(&self) -> bool {
@@ -283,6 +288,7 @@ impl InputRouter {
             if modifiers == 1 && key == 0x1b {
                 self.resize_mode = false;
                 self.broadcast_pending = false;
+                self.visibility_pending = None;
                 return Some(vec![InputRoute::Consume]);
             }
             if modifiers == 1 || modifiers == 2 {
@@ -293,11 +299,17 @@ impl InputRouter {
                 };
                 return Some(self.modal_key(key, context, config));
             }
-            if self.resize_mode && modifiers == 3 {
-                if let Some(action @ BindingAction::Focus(_)) =
-                    config.modified_binding(modifiers, key)
-                {
-                    return Some(self.action_for(action, context));
+            if (self.resize_mode || self.visibility_pending.is_some()) && modifiers == 3 {
+                if let Some(action) = config.modified_binding(modifiers, key) {
+                    if matches!(action, BindingAction::Focus(_))
+                        || (self.visibility_pending.is_some()
+                            && matches!(
+                                action,
+                                BindingAction::PreviousPane | BindingAction::NextPane
+                            ))
+                    {
+                        return Some(self.action_for(action, context));
+                    }
                 }
             }
             return Some(vec![InputRoute::Consume]);
@@ -336,6 +348,26 @@ impl InputRouter {
         context: &RouterContext,
         config: &BindingConfig,
     ) -> Vec<InputRoute> {
+        if let Some(global) = self.visibility_pending {
+            use crate::VisibilityElement::*;
+            let element = match key {
+                b'b' => TopBar,
+                b'a' => Borders,
+                b'i' => InsideBorders,
+                b'o' => OutsideBorders,
+                b'k' => Top,
+                b'h' => Left,
+                b'j' => Bottom,
+                b'l' => Right,
+                b's' => StackLines,
+                b'f' => Folds,
+                _ => return vec![InputRoute::Consume],
+            };
+            return vec![InputRoute::Command(WorkspaceCommand::ToggleVisibility {
+                element,
+                global,
+            })];
+        }
         if self.resize_mode {
             let direction = match key.to_ascii_lowercase() {
                 b'h' => Some(crate::Direction::Left),
@@ -359,6 +391,10 @@ impl InputRouter {
 
     fn action_for(&mut self, action: BindingAction, context: &RouterContext) -> Vec<InputRoute> {
         let command = match action {
+            BindingAction::VisibilityMenu { global } => {
+                self.visibility_pending = Some(global);
+                return vec![InputRoute::Consume];
+            }
             BindingAction::ResizeMode => {
                 self.resize_mode = true;
                 return vec![InputRoute::Consume];
@@ -504,6 +540,7 @@ impl InputRouter {
                 self.leader_pending = false;
                 self.resize_mode = false;
                 self.broadcast_pending = false;
+                self.visibility_pending = None;
                 return vec![InputRoute::Consume];
             }
             return vec![InputRoute::Forward(vec![0x1b])];

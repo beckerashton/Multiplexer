@@ -20,6 +20,8 @@ enum Node {
         slot: SlotId,
         #[serde(default)]
         folded: bool,
+        #[serde(default)]
+        hide_fold: bool,
     },
     Split {
         axis: Axis,
@@ -69,6 +71,7 @@ impl LayoutTree {
             root: Node::Leaf {
                 slot: root,
                 folded: false,
+                hide_fold: false,
             },
         }
     }
@@ -90,6 +93,28 @@ impl LayoutTree {
 
     pub fn is_folded(&self, slot: SlotId) -> bool {
         self.root.is_folded(slot)
+    }
+
+    pub fn fold_visible(&self, slot: SlotId) -> bool {
+        fn visible(node: &Node, slot: SlotId) -> Option<bool> {
+            match node {
+                Node::Leaf {
+                    slot: id,
+                    hide_fold,
+                    ..
+                } => (*id == slot).then_some(!hide_fold),
+                Node::Split { first, second, .. } => {
+                    visible(first, slot).or_else(|| visible(second, slot))
+                }
+            }
+        }
+        visible(&self.root, slot).unwrap_or(true)
+    }
+
+    pub fn set_fold_visible(&mut self, slot: SlotId, visible: bool) {
+        if let Some(Node::Leaf { hide_fold, .. }) = self.root.find_leaf_mut(slot) {
+            *hide_fold = !visible;
+        }
     }
 
     pub fn toggle_fold(&mut self, slot: SlotId) -> Result<(), LayoutError> {
@@ -122,16 +147,25 @@ impl LayoutTree {
             .root
             .find_leaf_mut(slot)
             .ok_or(LayoutError::UnknownSlot(slot))?;
+        let hide_fold = matches!(
+            leaf,
+            Node::Leaf {
+                hide_fold: true,
+                ..
+            }
+        );
         *leaf = Node::Split {
             axis,
             ratio,
             first: Box::new(Node::Leaf {
                 slot,
                 folded: false,
+                hide_fold,
             }),
             second: Box::new(Node::Leaf {
                 slot: new_slot,
                 folded: false,
+                hide_fold: false,
             }),
         };
         Ok(new_slot)
@@ -155,6 +189,7 @@ impl LayoutTree {
             Node::Leaf {
                 slot: new_slot,
                 folded: false,
+                hide_fold: false,
             },
         );
         self.root = Node::Split {
@@ -164,6 +199,7 @@ impl LayoutTree {
             second: Box::new(Node::Leaf {
                 slot: new_slot,
                 folded: false,
+                hide_fold: false,
             }),
         };
         Ok(new_slot)
@@ -198,6 +234,7 @@ impl LayoutTree {
             Node::Leaf {
                 slot: SlotId(0),
                 folded: false,
+                hide_fold: false,
             },
         );
         self.root = root.remove_leaf(slot).expect("non-root leaf is removable");
@@ -366,7 +403,7 @@ impl LayoutTree {
 impl Node {
     fn is_folded(&self, wanted: SlotId) -> bool {
         match self {
-            Self::Leaf { slot, folded } => *slot == wanted && *folded,
+            Self::Leaf { slot, folded, .. } => *slot == wanted && *folded,
             Self::Split { first, second, .. } => {
                 first.is_folded(wanted) || second.is_folded(wanted)
             }
@@ -481,11 +518,19 @@ impl Node {
 
     fn remove_leaf(self, wanted: SlotId) -> Option<Node> {
         match self {
-            Self::Leaf { slot, folded } => {
+            Self::Leaf {
+                slot,
+                folded,
+                hide_fold,
+            } => {
                 if slot == wanted {
                     None
                 } else {
-                    Some(Self::Leaf { slot, folded })
+                    Some(Self::Leaf {
+                        slot,
+                        folded,
+                        hide_fold,
+                    })
                 }
             }
             Self::Split {
@@ -512,6 +557,11 @@ impl Node {
 
     fn min_span(&self, min_cols: u16, min_rows: u16) -> (u32, u32) {
         match self {
+            Self::Leaf {
+                folded: true,
+                hide_fold: true,
+                ..
+            } => (0, 0),
             Self::Leaf { folded: true, .. } => (1, 1),
             Self::Leaf { .. } => (min_cols as u32, min_rows as u32),
             Self::Split {
@@ -685,7 +735,11 @@ fn child_bounds(
         Axis::Horizontal => (bounds.rows as u32, first_need_rows, second_need_rows),
     };
     let proportional = available.saturating_mul(ratio as u32) / LayoutTree::RATIO_SCALE as u32;
-    let span = if available >= first_need + second_need {
+    let span = if first_need == 0 {
+        0
+    } else if second_need == 0 {
+        available
+    } else if available >= first_need + second_need {
         if first.all_folded() && !second.all_folded() {
             first_need
         } else if second.all_folded() && !first.all_folded() {

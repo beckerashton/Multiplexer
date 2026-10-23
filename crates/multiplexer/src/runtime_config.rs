@@ -375,7 +375,7 @@ impl RuntimeConfig {
         add(
             "Manage Tabs",
             singles(&[(CreateTab, "Create Tab"), (CloseTab, "Close Tab")]),
-            "tw",
+            "cw",
             "Create / Close Tab",
         );
         add(
@@ -417,10 +417,42 @@ impl RuntimeConfig {
             "y",
             "Selection Mode",
         );
-        add("Other", singles(&[(ToggleBorderless, "Toggle Borderless")]), "z", "Toggle Borderless");
-        add("Other", singles(&[(ToggleBorderlessStackLines, "Borderless with Stack Lines")]), "Z", "Borderless with Stack Lines");
-        add("Other", singles(&[(SetJumpMark, "Mark Pane (then character)")]), "g", "Mark Pane (then character)");
-        add("Other", singles(&[(JumpToMark, "Jump to Pane (then character)")]), "g", "Jump to Pane (then character)");
+        add(
+            "Visibility",
+            singles(&[(VisibilityMenu { global: false }, "Toggle Pane Visibility")]),
+            "t",
+            "Toggle Pane Visibility",
+        );
+        add(
+            "Visibility",
+            singles(&[(VisibilityMenu { global: true }, "Toggle Tab Visibility")]),
+            "T",
+            "Toggle Tab Visibility",
+        );
+        add(
+            "Other",
+            singles(&[(ToggleBorderless, "Toggle Borderless")]),
+            "z",
+            "Toggle Borderless",
+        );
+        add(
+            "Other",
+            singles(&[(ToggleBorderlessStackLines, "Borderless with Stack Lines")]),
+            "Z",
+            "Borderless with Stack Lines",
+        );
+        add(
+            "Other",
+            singles(&[(SetJumpMark, "Mark Pane (then character)")]),
+            "g",
+            "Mark Pane (then character)",
+        );
+        add(
+            "Other",
+            singles(&[(JumpToMark, "Jump to Pane (then character)")]),
+            "g",
+            "Jump to Pane (then character)",
+        );
         add("Other", singles(&[(Quit, "Quit")]), "q", "Quit");
 
         if config.alt_numbers_enabled() {
@@ -440,6 +472,7 @@ impl RuntimeConfig {
             "Manage Stacks",
             "Manage Tabs",
             "Broadcast",
+            "Visibility",
             "Other",
         ] {
             if let Some(rows) = groups.remove(group) {
@@ -524,6 +557,11 @@ impl RuntimeConfig {
             ));
         }
         for (menu_key, action) in config.bindings() {
+            if matches!(action, BindingAction::VisibilityMenu { .. }) {
+                for (line, _) in visibility_help() {
+                    lines.push(format!("leader {} {}", format_key(*menu_key), line));
+                }
+            }
             if *action == BindingAction::BroadcastMenu {
                 for (key, action) in config.broadcast_bindings() {
                     lines.push(format!(
@@ -537,6 +575,9 @@ impl RuntimeConfig {
         }
         lines.push(
             "resize mode: hjkl = 1 cell; HJKL = 5 cells; Alt-hjkl = focus; Esc = exit".into(),
+        );
+        lines.push(
+            "visibility mode: repeated toggles; Alt-hjkl / Alt-[] = focus; Esc = exit".into(),
         );
         lines.push("selection mode: hjkl w/b/e 0/^/$ gg/G; counts; Ctrl-u/d/b/f pages; v/V select; y yank; Esc cancel".into());
         lines
@@ -622,6 +663,8 @@ fn parse_action(name: &str) -> Result<BindingAction, String> {
         "broadcast_target" | "toggle_manual_target" => Ok(BindingAction::ToggleManualTarget),
         "broadcast_reset" | "reset_broadcast" => Ok(BindingAction::ResetBroadcast),
         "toggle_borderless_stack_lines" => Ok(BindingAction::ToggleBorderlessStackLines),
+        "visibility_local" => Ok(BindingAction::VisibilityMenu { global: false }),
+        "visibility_global" => Ok(BindingAction::VisibilityMenu { global: true }),
         "toggle_fold" => Ok(BindingAction::ToggleFold),
         "toggle_borderless" => Ok(BindingAction::ToggleBorderless),
         "set_jump_mark" => Ok(BindingAction::SetJumpMark),
@@ -722,6 +765,12 @@ fn action_name(action: BindingAction) -> String {
         BindingAction::ToggleManualTarget => "broadcast_target".into(),
         BindingAction::ResetBroadcast => "broadcast_reset".into(),
         BindingAction::ToggleBorderlessStackLines => "toggle_borderless_stack_lines".into(),
+        BindingAction::VisibilityMenu { global } => if global {
+            "visibility_global"
+        } else {
+            "visibility_local"
+        }
+        .into(),
         BindingAction::ToggleFold => "toggle_fold".into(),
         BindingAction::ToggleBorderless => "toggle_borderless".into(),
         BindingAction::SetJumpMark => "set_jump_mark".into(),
@@ -739,7 +788,7 @@ mod tests {
     fn modal_bindings_have_separate_scopes_and_help_uses_custom_keys() {
         assert!(RuntimeConfig::from_toml_str("[bindings]\ntoggle_fold = \"F\"\nresize_mode = \"f\"").is_ok());
         let config = RuntimeConfig::from_toml_str(
-            "[bindings]\ntoggle_fold = \"F\"\nresize_mode = \"f\"\nbroadcast_menu = \"c\"\nbroadcast_reset = \"f\"",
+            "[bindings]\ntoggle_fold = \"F\"\nresize_mode = \"f\"\nbroadcast_menu = \"v\"\nbroadcast_reset = \"f\"",
         )
         .unwrap();
         assert_eq!(
@@ -753,13 +802,13 @@ mod tests {
         assert!(
             config
                 .effective_help()
-                .contains("leader c f: broadcast_reset")
+                .contains("leader v f: broadcast_reset")
         );
         assert!(
             config
                 .popup_help()
                 .iter()
-                .any(|(line, _)| line == "<leader> c ~ Broadcast Menu")
+                .any(|(line, _)| line == "<leader> v ~ Broadcast Menu")
         );
         assert!(
             config
@@ -1037,4 +1086,22 @@ toggle_fold = "F"
         assert_eq!(parse_key("|"), Ok(b'|'));
         assert!(parse_key("Ctrl-12").is_err());
     }
+}
+
+pub fn visibility_help() -> Vec<(String, bool)> {
+    [
+        "b ~ Top Bar (current tab)",
+        "a ~ All Borders",
+        "i ~ Inside Borders",
+        "o ~ Outside Borders",
+        "k ~ Top Border",
+        "h ~ Left Border",
+        "j ~ Bottom Border",
+        "l ~ Right Border",
+        "s ~ Stack Lines",
+        "f ~ Fold Indicators",
+    ]
+    .into_iter()
+    .map(|line| (line.into(), false))
+    .collect()
 }

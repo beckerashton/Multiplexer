@@ -61,7 +61,7 @@ stack_1 = "1"
 remove_slot = "d"
 kill_session = "x"
 kill_stack = "X"
-create_tab = "t"
+create_tab = "c"
 close_tab = "w"
 carry_1 = "Ctrl-Alt-1"
 carry_2 = "Ctrl-Alt-2"
@@ -160,6 +160,8 @@ wide and combining characters, stale-cell erasure, and cursor-only updates.
 - **Alt-1…9:** select the numbered tab; a missing tab starts one shell.
 - **Ctrl-b then `-` / `\`:** split the focused pane horizontally / vertically.
 - **Ctrl-b then `_` / `|`:** split the whole tab horizontally / vertically. The existing layout stays together above / left of the new focused pane.
+- **Ctrl-b then c:** create a tab.
+- **Ctrl-b then t / T:** open visibility controls for the selected pane / every pane in the current tab. Choose `b` for the top bar (current tab in either menu), `a` for all borders, `i` for inside borders (between panes), `o` for outside borders (along the tab perimeter), `k/h/j/l` for top/left/bottom/right borders, `s` for stack lines, or `f` for folded pane indicators. Hidden elements release their space to terminal content or neighboring panes. Tab-wide actions set every pane to the opposite of the selected pane's current setting. Inside/outside actions use the current layout and toggle the matching sides together: hide when all are visible, otherwise show. Settings are saved with the layout. The menu stays open after each toggle. Alt-hjkl changes focus and Alt-[/] cycles panes while the menu stays open; Escape exits. Rebind the menu prefixes with `visibility_local` / `visibility_global`. Hidden folded panes remain accessible through pane cycling or jump marks; unfold with `Ctrl-b f`.
 - **Ctrl-b then f:** fold / unfold the focused pane (including its stack). Folded panes show a thin edge marked `▸`, giving their space to neighboring panes. Use pane navigation to focus that edge and press the same binding to unfold. Sessions keep running at their last terminal size; folded panes receive no typing, mouse input, or broadcast input. Unfolding restores split proportions, and folded state is saved with the layout. Rebind with `toggle_fold`.
 - **Ctrl-b then r:** enter resize mode. `hjkl` pushes the focused pane or stack’s left/bottom/top/right edge outward by one cell; `HJKL` uses five-cell steps. Alt-hjkl changes focus while staying in resize mode. Escape exits. Terminal edges and neighboring minimum sizes limit expansion.
 - **Ctrl-b then `=` / `+`:** equalize pane widths / heights throughout the current tab. Nested splits share space by the number of panes along that axis; ratios on the other axis stay unchanged. Pane minimum sizes and cell rounding still apply. Rebind with `equalize_widths` / `equalize_heights`.

@@ -101,6 +101,7 @@ impl From<LayoutError> for DomainError {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Tab {
     borderless: bool,
+    top_bar_hidden: bool,
     stack_lines: bool,
     id: TabId,
     number: usize,
@@ -112,6 +113,7 @@ struct Tab {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SlotView {
+    pub visibility: crate::PaneVisibility,
     pub id: SlotId,
     pub stack: SlotStackView,
 }
@@ -119,6 +121,7 @@ pub struct SlotView {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TabView {
     pub borderless: bool,
+    pub top_bar_hidden: bool,
     pub stack_lines: bool,
     pub id: TabId,
     pub number: usize,
@@ -158,6 +161,8 @@ struct SavedTabLayout {
     #[serde(default)]
     borderless: bool,
     #[serde(default)]
+    top_bar_hidden: bool,
+    #[serde(default)]
     stack_lines: bool,
     number: usize,
     focused_slot: SlotId,
@@ -168,6 +173,8 @@ struct SavedTabLayout {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SavedStackLayout {
+    #[serde(default)]
+    visibility: crate::PaneVisibility,
     slot: SlotId,
     members: usize,
     active: Option<usize>,
@@ -211,6 +218,7 @@ impl Workspace {
         let session = Session::new(session_id, default_session.clone());
         let tab = Tab {
             borderless: false,
+            top_bar_hidden: false,
             stack_lines: false,
             id: tab_id,
             number: 1,
@@ -254,6 +262,7 @@ impl Workspace {
                 .iter()
                 .map(|tab| SavedTabLayout {
                     borderless: tab.borderless,
+                    top_bar_hidden: tab.top_bar_hidden,
                     stack_lines: tab.stack_lines,
                     number: tab.number,
                     focused_slot: tab.focused_slot,
@@ -265,6 +274,7 @@ impl Workspace {
                         .map(|slot| {
                             let stack = &tab.stacks[&slot];
                             SavedStackLayout {
+                                visibility: stack.visibility,
                                 slot,
                                 members: stack.sessions().len(),
                                 active: stack.active_index(),
@@ -333,7 +343,7 @@ impl Workspace {
             let mut stacks = BTreeMap::new();
             for slot in slots {
                 let saved_stack = saved_stacks.remove(&slot).expect("stack checked above");
-                let stack = if saved_stack.members == 0 {
+                let mut stack = if saved_stack.members == 0 {
                     if saved_stack.active.is_some() {
                         return Err(invalid("empty saved pane has an active stack member"));
                     }
@@ -368,6 +378,7 @@ impl Workspace {
                     stack.select(active);
                     stack
                 };
+                stack.visibility = saved_stack.visibility;
                 stacks.insert(slot, stack);
             }
 
@@ -377,6 +388,7 @@ impl Workspace {
             );
             tabs.push(Tab {
                 borderless: saved_tab.borderless,
+                top_bar_hidden: saved_tab.top_bar_hidden,
                 stack_lines: saved_tab.stack_lines,
                 id,
                 number: saved_tab.number,
@@ -431,6 +443,11 @@ impl Workspace {
 
     pub fn borderless(&self) -> bool {
         self.active_tab_ref().borderless
+    }
+
+    pub fn top_bar_hidden(&self) -> bool {
+        let tab = self.active_tab_ref();
+        tab.borderless || tab.top_bar_hidden
     }
 
     pub fn set_bounds(&mut self, bounds: CellRect) {
@@ -561,6 +578,64 @@ impl Workspace {
                     Transition::unchanged()
                 })
             }
+            WorkspaceCommand::ToggleVisibility { element, global } => {
+                use crate::VisibilityElement;
+                let (bounds, minimum) = (self.bounds, self.minimum_pane_size);
+                let tab = self.active_tab_mut();
+                // Materialize legacy borderless mode before independently changing decorations.
+                if tab.borderless {
+                    let visibility = tab.pane_visibility(tab.focused_slot);
+                    for stack in tab.stacks.values_mut() {
+                        stack.visibility = visibility;
+                    }
+                    tab.top_bar_hidden = true;
+                    tab.borderless = false;
+                    tab.stack_lines = false;
+                }
+                if element == VisibilityElement::TopBar {
+                    tab.top_bar_hidden = !tab.top_bar_hidden;
+                } else if matches!(
+                    element,
+                    VisibilityElement::InsideBorders | VisibilityElement::OutsideBorders
+                ) {
+                    let rects = tab.layout.geometry(bounds, minimum);
+                    let outside = element == VisibilityElement::OutsideBorders;
+                    let sides: Vec<_> = tab
+                        .stacks
+                        .keys()
+                        .filter(|id| global || **id == tab.focused_slot)
+                        .flat_map(|id| {
+                            border_sides(rects[id], bounds, outside).map(move |side| (*id, side))
+                        })
+                        .collect();
+                    let visible = !sides
+                        .iter()
+                        .all(|(id, side)| tab.stacks[id].visibility.visible(*side));
+                    for (id, side) in sides {
+                        tab.stacks
+                            .get_mut(&id)
+                            .unwrap()
+                            .visibility
+                            .set(side, visible);
+                    }
+                } else {
+                    let visible = if element == VisibilityElement::Folds {
+                        !tab.layout.fold_visible(tab.focused_slot)
+                    } else {
+                        !tab.pane_visibility(tab.focused_slot).visible(element)
+                    };
+                    for (id, stack) in &mut tab.stacks {
+                        if global || *id == tab.focused_slot {
+                            if element == VisibilityElement::Folds {
+                                tab.layout.set_fold_visible(*id, visible);
+                            } else {
+                                stack.visibility.set(element, visible);
+                            }
+                        }
+                    }
+                }
+                Ok(Transition::changed())
+            }
             WorkspaceCommand::ToggleFold => {
                 let tab = self.active_tab_mut();
                 tab.layout.toggle_fold(tab.focused_slot)?;
@@ -617,6 +692,7 @@ impl Workspace {
                 .iter()
                 .map(|tab| TabView {
                     borderless: tab.borderless,
+                    top_bar_hidden: tab.top_bar_hidden,
                     stack_lines: tab.stack_lines,
                     id: tab.id,
                     number: tab.number,
@@ -630,6 +706,7 @@ impl Workspace {
                             (
                                 *id,
                                 SlotView {
+                                    visibility: tab.pane_visibility(*id),
                                     id: *id,
                                     stack: stack.view(),
                                 },
@@ -939,6 +1016,7 @@ impl Workspace {
         let slot = self.allocate_slot();
         self.tabs.push(Tab {
             borderless: false,
+            top_bar_hidden: false,
             stack_lines: false,
             id,
             number,
@@ -1425,4 +1503,47 @@ fn preferred_removal_neighbor(
     ]
     .into_iter()
     .find_map(|direction| layout.neighbor(slot, direction, bounds, minimum))
+}
+
+impl Tab {
+    fn pane_visibility(&self, id: SlotId) -> crate::PaneVisibility {
+        if self.borderless {
+            crate::PaneVisibility {
+                top: false,
+                left: false,
+                bottom: false,
+                right: false,
+                stack_lines: self.stack_lines,
+            }
+        } else {
+            self.stacks
+                .get(&id)
+                .map(|s| s.visibility)
+                .unwrap_or_default()
+        }
+    }
+}
+
+/// Classify the physical pane edges against the tab's content area, before
+/// stack lines or pane borders inset the terminal content.
+fn border_sides(
+    rect: CellRect,
+    bounds: CellRect,
+    outside: bool,
+) -> impl Iterator<Item = crate::VisibilityElement> {
+    use crate::VisibilityElement::*;
+    [
+        (Top, rect.y == bounds.y),
+        (Left, rect.x == bounds.x),
+        (
+            Bottom,
+            rect.y.saturating_add(rect.rows) == bounds.y.saturating_add(bounds.rows),
+        ),
+        (
+            Right,
+            rect.x.saturating_add(rect.cols) == bounds.x.saturating_add(bounds.cols),
+        ),
+    ]
+    .into_iter()
+    .filter_map(move |(side, outer)| (outer == outside).then_some(side))
 }

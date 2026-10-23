@@ -198,7 +198,8 @@ fn compose(
         .find(|tab| tab.id == view.active_tab)
         .expect("active tab");
     let (cols, rows) = (area.width, area.height);
-    let bounds = crate::pane_geometry::workspace_bounds(cols, rows, tab.borderless);
+    let bounds =
+        crate::pane_geometry::workspace_bounds(cols, rows, tab.borderless || tab.top_bar_hidden);
     let rects = tab.layout.geometry(bounds, view.minimum_pane_size);
 
     let mut cursor = None;
@@ -215,6 +216,9 @@ fn compose(
             continue;
         };
         if tab.layout.is_folded(slot_id) {
+            if !tab.layout.fold_visible(slot_id) {
+                continue;
+            }
             let style = Style::default().fg(if slot_id == tab.focused_slot {
                 theme::PURPLE
             } else {
@@ -234,8 +238,8 @@ fn compose(
             }
             continue;
         }
-        let frame = crate::pane_geometry::stack_frame(rect, &slot.stack, tab.borderless);
-        let inner = crate::pane_geometry::pane_content(rect, &slot.stack, tab.borderless, tab.stack_lines);
+        let frame = crate::pane_geometry::stack_frame(rect, &slot.stack, slot.visibility);
+        let inner = crate::pane_geometry::pane_content(rect, &slot.stack, slot.visibility);
         let width = inner.cols;
         let height = inner.rows;
         if width == 0 || height == 0 {
@@ -250,12 +254,25 @@ fn compose(
         } else {
             ""
         };
-        if !tab.borderless || tab.stack_lines {
+        if slot.visibility.stack_lines {
             paint_stack_edges(&mut buffer, rect, frame, tab.borderless);
         }
-        if !tab.borderless {
+        let mut borders = Borders::NONE;
+        if slot.visibility.top {
+            borders |= Borders::TOP;
+        }
+        if slot.visibility.left {
+            borders |= Borders::LEFT;
+        }
+        if slot.visibility.bottom {
+            borders |= Borders::BOTTOM;
+        }
+        if slot.visibility.right {
+            borders |= Borders::RIGHT;
+        }
+        if borders != Borders::NONE {
             Block::default()
-                .borders(Borders::ALL)
+                .borders(borders)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(if focused { theme::PURPLE } else { theme::MUTED }))
                 .title(header)
@@ -289,7 +306,7 @@ fn compose(
             }
         }
     }
-    if !tab.borderless && rows > 0 && cols > 0 {
+    if !tab.borderless && !tab.top_bar_hidden && rows > 0 && cols > 0 {
         let mut x = 0;
         for (index, (label, active)) in tab_labels(&view).into_iter().enumerate() {
             if index > 0 {
@@ -337,7 +354,18 @@ fn compose(
         let runtime = crate::runtime_config::RuntimeConfig {
             bindings: config.clone(),
         };
-        if router.resize_mode() {
+        if let Some(global) = router.visibility_pending() {
+            bindings_popup(
+                &mut buffer,
+                &crate::runtime_config::visibility_help(),
+                if global {
+                    " Visibility — entire tab "
+                } else {
+                    " Visibility — selected pane "
+                },
+                "Alt-hjkl / Alt-[] focus · Esc exits",
+            );
+        } else if router.resize_mode() {
             bindings_popup(
                 &mut buffer,
                 &runtime.resize_help(),
@@ -908,7 +936,8 @@ mod tests {
             sessions: (0..3).map(mux_core::SessionId).collect(),
             active: Some(1),
         };
-        let frame = crate::pane_geometry::stack_frame(rect, &stack, false);
+        let frame =
+            crate::pane_geometry::stack_frame(rect, &stack, mux_core::PaneVisibility::default());
         let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 16, 12));
         super::paint_stack_edges(&mut buffer, rect, frame, false);
         assert_eq!(buffer[(2, 1)].symbol(), "╭");
@@ -918,7 +947,10 @@ mod tests {
         assert_eq!(buffer[(4, 9)].symbol(), "─");
         assert_eq!(buffer[(13, 9)].symbol(), "╯");
         assert_eq!(buffer[(2, 2)].symbol(), " ");
-        assert_eq!(crate::pane_geometry::content(frame).rows, 5);
+        assert_eq!(
+            crate::pane_geometry::inset(frame, mux_core::PaneVisibility::default()).rows,
+            5
+        );
     }
 
     #[test]

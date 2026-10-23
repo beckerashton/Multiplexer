@@ -1207,3 +1207,179 @@ fn folded_panes_remain_navigable_and_persist_without_changing_sessions() {
         })
         .unwrap();
 }
+
+#[test]
+fn visibility_is_scoped_persisted_and_hidden_folds_release_their_space() {
+    use mux_core::VisibilityElement::*;
+    let (mut workspace, _) = Workspace::new(shell("one"));
+    workspace
+        .execute(WorkspaceCommand::SplitFocused {
+            axis: Axis::Vertical,
+            session: shell("two"),
+        })
+        .unwrap();
+    let toggle = |element, global| WorkspaceCommand::ToggleVisibility { element, global };
+    for element in [Top, Left, Bottom, Right, StackLines] {
+        let transition = workspace.execute(toggle(element, false)).unwrap();
+        assert!(transition.changed && transition.effects.is_empty());
+    }
+    let view = workspace.view();
+    let tab = active_tab(&view);
+    let focused = tab.focused_slot;
+    let other = *tab.slots.keys().find(|id| **id != focused).unwrap();
+    assert_eq!(
+        tab.slots[&other].visibility,
+        mux_core::PaneVisibility::default()
+    );
+    assert!(!tab.slots[&focused].visibility.top);
+    // Tab-wide toggles normalize every pane to the focused pane's new state.
+    workspace.execute(toggle(Borders, true)).unwrap();
+    assert!(
+        active_tab(&workspace.view())
+            .slots
+            .values()
+            .all(|s| s.visibility.visible(Borders))
+    );
+    workspace.execute(toggle(Folds, false)).unwrap();
+    workspace.execute(WorkspaceCommand::ToggleFold).unwrap();
+    workspace.execute(toggle(TopBar, false)).unwrap();
+    assert!(workspace.top_bar_hidden());
+    let view = workspace.view();
+    let tab = active_tab(&view);
+    let bounds = CellRect {
+        x: 0,
+        y: 0,
+        cols: 80,
+        rows: 24,
+    };
+    let rects = tab.layout.geometry(bounds, view.minimum_pane_size);
+    assert_eq!(rects[&focused].cols, 0);
+    assert_eq!(rects[&other], bounds);
+    let saved = workspace.layout_snapshot();
+    let (restored, _) = Workspace::restore_layout(saved.clone(), shell("restored")).unwrap();
+    assert_eq!(restored.layout_snapshot(), saved);
+    // Settings on a different tab remain at their defaults.
+    workspace
+        .execute(WorkspaceCommand::NavigateTab { number: 2 })
+        .unwrap();
+    assert!(!workspace.top_bar_hidden());
+    assert!(
+        active_tab(&workspace.view())
+            .slots
+            .values()
+            .all(|s| s.visibility == mux_core::PaneVisibility::default())
+    );
+}
+
+#[test]
+fn inside_and_outside_borders_follow_nested_pane_edges_and_scope() {
+    use mux_core::{PaneVisibility, VisibilityElement::*};
+    let (mut workspace, _) = Workspace::new(shell("left"));
+    workspace.set_bounds(CellRect {
+        x: 3,
+        y: 2,
+        cols: 80,
+        rows: 24,
+    });
+    let left = active_tab(&workspace.view()).focused_slot;
+    let before = workspace.view();
+    workspace
+        .execute(WorkspaceCommand::ToggleVisibility {
+            element: InsideBorders,
+            global: true,
+        })
+        .unwrap();
+    assert_eq!(
+        workspace.view(),
+        before,
+        "a sole pane has no inside borders"
+    );
+    workspace
+        .execute(WorkspaceCommand::SplitFocused {
+            axis: Axis::Vertical,
+            session: shell("top-right"),
+        })
+        .unwrap();
+    let top_right = active_tab(&workspace.view()).focused_slot;
+    workspace
+        .execute(WorkspaceCommand::SplitFocused {
+            axis: Axis::Horizontal,
+            session: shell("bottom-right"),
+        })
+        .unwrap();
+    let bottom_right = active_tab(&workspace.view()).focused_slot;
+    let toggle = |element, global| WorkspaceCommand::ToggleVisibility { element, global };
+    let vis = |workspace: &Workspace, id| active_tab(&workspace.view()).slots[&id].visibility;
+    workspace.execute(toggle(InsideBorders, false)).unwrap();
+    assert_eq!(
+        vis(&workspace, bottom_right),
+        PaneVisibility {
+            top: false,
+            left: false,
+            ..PaneVisibility::default()
+        }
+    );
+    assert_eq!(vis(&workspace, left), PaneVisibility::default());
+    assert_eq!(vis(&workspace, top_right), PaneVisibility::default());
+    workspace.execute(toggle(InsideBorders, false)).unwrap();
+    workspace.execute(toggle(OutsideBorders, false)).unwrap();
+    assert_eq!(
+        vis(&workspace, bottom_right),
+        PaneVisibility {
+            bottom: false,
+            right: false,
+            ..PaneVisibility::default()
+        }
+    );
+    assert_eq!(vis(&workspace, left), PaneVisibility::default());
+    workspace.execute(toggle(OutsideBorders, false)).unwrap();
+    workspace.execute(toggle(InsideBorders, true)).unwrap();
+    assert_eq!(
+        vis(&workspace, left),
+        PaneVisibility {
+            right: false,
+            ..PaneVisibility::default()
+        }
+    );
+    assert_eq!(
+        vis(&workspace, top_right),
+        PaneVisibility {
+            left: false,
+            bottom: false,
+            ..PaneVisibility::default()
+        }
+    );
+    assert_eq!(
+        vis(&workspace, bottom_right),
+        PaneVisibility {
+            top: false,
+            left: false,
+            ..PaneVisibility::default()
+        }
+    );
+    workspace.execute(toggle(OutsideBorders, true)).unwrap();
+    for id in [left, top_right, bottom_right] {
+        assert_eq!(
+            vis(&workspace, id),
+            PaneVisibility {
+                top: false,
+                left: false,
+                bottom: false,
+                right: false,
+                stack_lines: true
+            }
+        );
+    }
+    let saved = workspace.layout_snapshot();
+    let (restored, _) = Workspace::restore_layout(saved.clone(), shell("restored")).unwrap();
+    assert_eq!(restored.layout_snapshot(), saved);
+    workspace.execute(toggle(OutsideBorders, true)).unwrap();
+    assert!(
+        !vis(&workspace, left).right,
+        "restoring outer edges keeps inner edges hidden"
+    );
+    workspace.execute(toggle(InsideBorders, true)).unwrap();
+    for id in [left, top_right, bottom_right] {
+        assert_eq!(vis(&workspace, id), PaneVisibility::default());
+    }
+}

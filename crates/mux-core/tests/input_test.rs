@@ -206,7 +206,7 @@ fn command_routes_stop_at_first_command_for_fresh_context() {
     let mut router = InputRouter::new();
     let config = BindingConfig::default();
     let first = router.route(
-        InputEvent::Bytes(vec![0x02, b't', 0x1b, b'2']),
+        InputEvent::Bytes(vec![0x02, b'c', 0x1b, b'2']),
         &context(),
         &config,
     );
@@ -353,7 +353,7 @@ fn modified_navigation_is_chunk_safe_and_old_leader_bindings_are_removed() {
             );
         }
     }
-    for key in b"hjklHJKLc" {
+    for key in b"hjklHJKL" {
         assert_eq!(config.binding(*key), None);
     }
     let mut router = InputRouter::new();
@@ -591,14 +591,14 @@ fn modal_entry_and_broadcast_commands_support_separate_binding_scopes() {
     let mut config = BindingConfig::default();
     config.rebind(b'F', BindingAction::ToggleFold).unwrap();
     config.rebind(b'f', BindingAction::ResizeMode).unwrap();
-    config.rebind(b'c', BindingAction::BroadcastMenu).unwrap();
+    config.rebind(b'v', BindingAction::BroadcastMenu).unwrap();
     config.rebind(b'f', BindingAction::ResetBroadcast).unwrap();
     let mut router = InputRouter::new();
     router.route(InputEvent::Bytes(b"\x02f".to_vec()), &context(), &config);
     assert!(router.resize_mode());
     router.route(InputEvent::Bytes(b"\x1b[27u".to_vec()), &context(), &config);
     assert!(!router.resize_mode());
-    let routes = router.route(InputEvent::Bytes(b"\x02cf".to_vec()), &context(), &config);
+    let routes = router.route(InputEvent::Bytes(b"\x02vf".to_vec()), &context(), &config);
     assert_eq!(
         routes.last(),
         Some(&InputRoute::Command(WorkspaceCommand::ResetBroadcast))
@@ -632,4 +632,115 @@ fn borderless_and_jump_prefixes_consume_keys_and_cancel_safely() {
     router.route(InputEvent::Bytes(b"\x1b\x07".to_vec()), &context(), &config);
     assert_eq!(router.route(InputEvent::Paste(b"abc".to_vec()), &context(), &config), vec![InputRoute::Consume]);
     assert_eq!(router.jump_pending(), None);
+}
+
+#[test]
+fn visibility_menus_route_every_element_locally_and_globally_and_cancel() {
+    use mux_core::VisibilityElement::*;
+    let config = BindingConfig::default();
+    for (prefix, global) in [(b't', false), (b'T', true)] {
+        for (key, element) in [
+            (b'b', TopBar),
+            (b'a', Borders),
+            (b'i', InsideBorders),
+            (b'o', OutsideBorders),
+            (b'k', Top),
+            (b'h', Left),
+            (b'j', Bottom),
+            (b'l', Right),
+            (b's', StackLines),
+            (b'f', Folds),
+        ] {
+            let mut router = InputRouter::new();
+            let routes = router.route(
+                InputEvent::Bytes(vec![config.leader(), prefix, b'?', key]),
+                &context(),
+                &config,
+            );
+            assert!(
+                routes.contains(&InputRoute::Command(WorkspaceCommand::ToggleVisibility {
+                    element,
+                    global
+                }))
+            );
+            assert_eq!(router.visibility_pending(), Some(global));
+            assert_eq!(
+                router.route(InputEvent::Bytes(vec![key]), &context(), &config),
+                vec![InputRoute::Command(WorkspaceCommand::ToggleVisibility {
+                    element,
+                    global
+                })]
+            );
+            assert_eq!(router.visibility_pending(), Some(global));
+        }
+        let mut router = InputRouter::new();
+        router.route(
+            InputEvent::Bytes(vec![config.leader(), prefix, 0x1b]),
+            &context(),
+            &config,
+        );
+        router.route(InputEvent::Timeout, &context(), &config);
+        assert!(!router.modal());
+        assert_eq!(
+            router.route(InputEvent::Bytes(vec![b'a']), &context(), &config),
+            vec![InputRoute::Forward(vec![b'a'])]
+        );
+        // Extended-key Escape must cancel as well.
+        router.route(
+            InputEvent::Bytes(vec![config.leader(), prefix]),
+            &context(),
+            &config,
+        );
+        router.route(InputEvent::Bytes(b"\x1b[27u".to_vec()), &context(), &config);
+        assert!(!router.modal());
+    }
+}
+
+#[test]
+fn visibility_mode_keeps_its_scope_while_navigating_panes() {
+    let mut config = BindingConfig::default();
+    config
+        .bind_modified(3, b'v', BindingAction::Focus(Direction::Left))
+        .unwrap();
+    for (prefix, global) in [(b't', false), (b'T', true)] {
+        let mut router = InputRouter::new();
+        router.route(
+            InputEvent::Bytes(vec![config.leader(), prefix]),
+            &context(),
+            &config,
+        );
+        for (bytes, command) in [
+            (
+                b"\x1bv".as_slice(),
+                WorkspaceCommand::Focus(Direction::Left),
+            ),
+            (b"\x1bj", WorkspaceCommand::Focus(Direction::Down)),
+            (b"\x1b[107;3u", WorkspaceCommand::Focus(Direction::Up)),
+            (b"\x1b[108;3u", WorkspaceCommand::Focus(Direction::Right)),
+            (b"\x1b[", WorkspaceCommand::CyclePane { delta: -1 }),
+            (b"\x1b]", WorkspaceCommand::CyclePane { delta: 1 }),
+        ] {
+            let mut routes = router.route(InputEvent::Bytes(bytes.to_vec()), &context(), &config);
+            routes.extend(router.route(InputEvent::Timeout, &context(), &config));
+            assert!(
+                routes.contains(&InputRoute::Command(command)),
+                "{bytes:?}: {routes:?}"
+            );
+            assert_eq!(router.visibility_pending(), Some(global));
+            assert_eq!(
+                router.route(InputEvent::Bytes(b"a".to_vec()), &context(), &config),
+                vec![InputRoute::Command(WorkspaceCommand::ToggleVisibility {
+                    element: mux_core::VisibilityElement::Borders,
+                    global
+                })]
+            );
+            assert_eq!(router.visibility_pending(), Some(global));
+        }
+        assert_eq!(
+            router.route(InputEvent::Paste(b"a".to_vec()), &context(), &config),
+            vec![InputRoute::Consume]
+        );
+        router.route(InputEvent::Bytes(b"\x1b[27u".to_vec()), &context(), &config);
+        assert!(!router.modal());
+    }
 }

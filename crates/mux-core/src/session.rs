@@ -23,6 +23,7 @@ impl Session {
 /// `sessions`, or `None` only for an intentionally empty slot.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SlotStack {
+    pub visibility: crate::PaneVisibility,
     sessions: Vec<SessionId>,
     active: Option<usize>,
 }
@@ -36,6 +37,7 @@ pub struct SlotStackView {
 impl SlotStack {
     pub fn with_session(session: SessionId) -> Self {
         Self {
+            visibility: crate::PaneVisibility::default(),
             sessions: vec![session],
             active: Some(0),
         }
