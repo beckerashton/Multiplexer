@@ -159,8 +159,8 @@ impl Default for BindingConfig {
             (b'm', BindingAction::ToggleManualTarget),
             (b'r', BindingAction::ResetBroadcast),
             (b'f', BindingAction::ToggleFold),
-            (b'z', BindingAction::ToggleBorderless),
-            (b'Z', BindingAction::ToggleBorderlessStackLines),
+            (b'Z', BindingAction::ToggleBorderless),
+            (b'z', BindingAction::ToggleBorderlessStackLines),
             (b'y', BindingAction::SelectionMode),
             (b'q', BindingAction::Quit),
         ];

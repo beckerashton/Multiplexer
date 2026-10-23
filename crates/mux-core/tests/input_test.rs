@@ -610,8 +610,10 @@ fn modal_entry_and_broadcast_commands_support_separate_binding_scopes() {
 fn borderless_and_jump_prefixes_consume_keys_and_cancel_safely() {
     let config = BindingConfig::default();
     let mut router = InputRouter::new();
-    assert_eq!(router.route(InputEvent::Bytes(b"\x02z".to_vec()), &context(), &config),
+    assert_eq!(router.route(InputEvent::Bytes(b"\x02Z".to_vec()), &context(), &config),
         vec![InputRoute::Consume, InputRoute::Command(WorkspaceCommand::ToggleBorderless)]);
+    assert_eq!(router.route(InputEvent::Bytes(b"\x02z".to_vec()), &context(), &config),
+        vec![InputRoute::Consume, InputRoute::Command(WorkspaceCommand::ToggleBorderlessStackLines)]);
     for (prefix, set) in [(b"\x1b\x07".as_slice(), true), (b"\x1bg", false), (b"\x1b[103;7u", true), (b"\x1b[103;3u", false)] {
         // Fragmented terminal reads must behave like a single key report.
         for byte in prefix { router.route(InputEvent::Bytes(vec![*byte]), &context(), &config); }

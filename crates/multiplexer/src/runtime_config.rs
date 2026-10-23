@@ -432,13 +432,13 @@ impl RuntimeConfig {
         add(
             "Other",
             singles(&[(ToggleBorderless, "Toggle Borderless")]),
-            "z",
+            "Z",
             "Toggle Borderless",
         );
         add(
             "Other",
             singles(&[(ToggleBorderlessStackLines, "Borderless with Stack Lines")]),
-            "Z",
+            "z",
             "Borderless with Stack Lines",
         );
         add(

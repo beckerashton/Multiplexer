@@ -250,9 +250,9 @@ is accepted as an alias for `selection_mode`.
 
 ### Borderless tabs and pane jump marks
 
-Press `leader z` (default: `Ctrl-b`, then `z`) to toggle borderless mode for the
+Press `leader Z` (default: `Ctrl-b`, then `Z`) to toggle borderless mode for the
 current tab. Panes use the full terminal without pane borders or the tab bar. The command popup and confirmation prompts still work. The
-setting is saved with the tab layout. `leader Z` toggles a variant that keeps one
+setting is saved with the tab layout. `leader z` toggles a variant that keeps one
 line per hidden stack member, without a border around the active pane. Switching
 between `z` and `Z` selects that variant; repeating the same binding restores the
 normal layout.
