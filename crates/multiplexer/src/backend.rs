@@ -233,6 +233,15 @@ impl TerminalBackend {
             };
             if let TerminalEvent::Output { session, bytes } = &event {
                 if let Some(terminal) = self.terminals.get_mut(session) {
+                    // Child applications send terminal queries through the PTY.
+                    // The outer terminal cannot see those queries, so answer
+                    // the common primary device attribute request here.
+                    if contains_primary_device_attribute_query(bytes) {
+                        if let Ok(mut writer) = terminal.writer.lock() {
+                            let _ = writer.write_all(b"\x1b[?1;2c");
+                            let _ = writer.flush();
+                        }
+                    }
                     terminal.parser.process(bytes);
                 }
             }
@@ -245,6 +254,11 @@ impl TerminalBackend {
         }
         observed
     }
+}
+
+fn contains_primary_device_attribute_query(bytes: &[u8]) -> bool {
+    bytes.windows(3).any(|sequence| sequence == b"\x1b[c")
+        || bytes.windows(4).any(|sequence| sequence == b"\x1b[0c")
 }
 
 impl Drop for TerminalBackend {
